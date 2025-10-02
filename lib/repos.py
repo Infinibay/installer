@@ -14,7 +14,7 @@ import glob
 import shutil
 
 from .config import InstallerContext
-from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug
+from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section, GREEN, RESET
 from .utils import run_command, CommandResult
 
 # Repository URLs
@@ -88,6 +88,11 @@ def clone_repository(url: str, destination: str, context: InstallerContext):
     """
     Clone Git repository from URL to destination.
 
+    IMPORTANT: For private repositories, authentication is required:
+        - Use HTTPS with GitHub Personal Access Token (classic or fine-grained)
+        - Configure git credential helper: git config --global credential.helper store
+        - Or use SSH URLs instead of HTTPS
+
     Args:
         url: Git repository URL
         destination: Target directory path
@@ -103,16 +108,17 @@ def clone_repository(url: str, destination: str, context: InstallerContext):
         log_info(f"[DRY RUN] Would clone: {url} → {destination}")
         return
 
-    # Check if already cloned
+    # Check if already exists
     if os.path.exists(destination):
         git_dir = os.path.join(destination, '.git')
         if os.path.exists(git_dir):
             log_info("Repository already cloned, skipping")
             return
         else:
-            log_warning(f"Directory exists but is not a git repository: {destination}")
-            log_error("Please remove this directory manually and try again")
-            raise RuntimeError(f"Invalid directory at {destination}")
+            # Directory exists but is not a git repo - assume it's local code
+            log_info("Directory exists (not a git repo), assuming local development code")
+            log_info("Skipping clone, will use existing code")
+            return
 
     # Ensure parent directory exists
     parent_dir = os.path.dirname(destination)
@@ -150,7 +156,22 @@ def clone_repository(url: str, destination: str, context: InstallerContext):
                 log_error("  - Check available disk space")
                 log_error(f"  - Check write permissions to {parent_dir}")
 
-                if "Permission denied" in str(e):
+                # Check for authentication errors
+                error_str = str(e.stderr) if hasattr(e, 'stderr') and e.stderr else str(e)
+                if "Authentication failed" in error_str or "fatal: could not read Username" in error_str:
+                    log_error("")
+                    log_error("Authentication required for private repository!")
+                    log_error("Solutions:")
+                    log_error("  1. Make repository public (if appropriate)")
+                    log_error("  2. Use GitHub Personal Access Token:")
+                    log_error("     - Generate token at: https://github.com/settings/tokens")
+                    log_error("     - Use as password when Git prompts for credentials")
+                    log_error("     - Token needs 'repo' scope for private repositories")
+                    log_error("  3. Configure git credential helper:")
+                    log_error("     git config --global credential.helper store")
+                    log_error("  4. Use SSH URL instead of HTTPS (requires SSH key setup)")
+
+                if "Permission denied" in error_str:
                     log_error("\nPermission denied - try running with sudo")
 
                 raise RuntimeError(f"Failed to clone repository after {MAX_CLONE_RETRIES} attempts")
@@ -260,14 +281,80 @@ def build_libvirt_node(context: InstallerContext):
         raise
 
 
+def get_directory_owner(directory: str) -> tuple:
+    """
+    Get the owner (uid, gid) of a directory.
+
+    Args:
+        directory: Path to directory
+
+    Returns:
+        Tuple of (uid, gid) or None if not determinable, or None if owner is root
+    """
+    try:
+        stat_info = os.stat(directory)
+        uid, gid = stat_info.st_uid, stat_info.st_gid
+
+        # Don't bother restoring if already owned by root
+        if uid == 0:
+            return None
+
+        return (uid, gid)
+    except Exception:
+        return None
+
+
+def restore_ownership(directory: str, owner_info: tuple):
+    """
+    Restore ownership of directory and contents.
+
+    Args:
+        directory: Path to directory
+        owner_info: Tuple of (uid, gid) from get_directory_owner
+    """
+    if not owner_info:
+        return
+
+    uid, gid = owner_info
+
+    try:
+        # Restore ownership recursively
+        for root, dirs, files in os.walk(directory):
+            os.chown(root, uid, gid)
+            for d in dirs:
+                try:
+                    os.chown(os.path.join(root, d), uid, gid)
+                except Exception:
+                    pass
+            for f in files:
+                try:
+                    os.chown(os.path.join(root, f), uid, gid)
+                except Exception:
+                    pass
+        log_debug(f"Restored ownership of {directory} to {uid}:{gid}")
+    except Exception as e:
+        log_warning(f"Could not restore ownership of {directory}: {e}")
+
+
 def build_backend(context: InstallerContext):
     """
     Build backend dependencies.
 
     Commands:
         cd backend
+        npm cache clean --force  # Important: clears cached .tgz integrity hashes
+        rm package-lock.json     # Regenerate with current libvirt-node .tgz hash
         npm install
         npx prisma generate
+
+    Note on libvirt-node integrity errors:
+        When libvirt-node is rebuilt, the .tgz file changes but package-lock.json
+        keeps the old integrity hash. This causes EINTEGRITY errors.
+        Solution: Clean cache and regenerate package-lock.json on each install.
+
+    Note on ownership:
+        When using existing code directory, preserves original file ownership.
+        Files created by npm/prisma will be set back to original owner.
 
     Verifies:
         - node_modules exists
@@ -292,7 +379,23 @@ def build_backend(context: InstallerContext):
     if not os.path.exists(context.backend_dir):
         raise RuntimeError(f"Backend directory not found: {context.backend_dir}")
 
+    # Remember original ownership
+    original_owner = get_directory_owner(context.backend_dir)
+
     try:
+        # Clean npm cache to avoid integrity checksum errors with local .tgz packages
+        log_info("Cleaning npm cache to ensure fresh installation...")
+        try:
+            run_command("npm cache clean --force", cwd=context.backend_dir, timeout=60)
+        except subprocess.CalledProcessError as e:
+            log_warning("Failed to clean npm cache, continuing anyway...")
+
+        # Remove package-lock.json to regenerate with correct integrity hashes
+        package_lock_path = os.path.join(context.backend_dir, "package-lock.json")
+        if os.path.exists(package_lock_path):
+            log_info("Removing package-lock.json to regenerate with current .tgz hash...")
+            os.remove(package_lock_path)
+
         # Step 1: npm install
         log_info("Step 1/2: Installing backend dependencies...")
         log_info("This will install @infinibay/libvirt-node from the .tgz package...")
@@ -339,6 +442,11 @@ def build_backend(context: InstallerContext):
 
         log_success("Backend dependencies installed and Prisma client generated")
         log_info("Note: Database migrations will be run in Phase 5 (after .env configuration)")
+
+        # Restore original ownership if we're using an existing directory
+        if original_owner:
+            log_info("Restoring original file ownership...")
+            restore_ownership(context.backend_dir, original_owner)
 
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out: {e}")
@@ -508,9 +616,7 @@ def clone_and_build(context: InstallerContext):
     # Phase 4a: Clone Repositories
     # =================================================================
     try:
-        log_info("\n" + "="*60)
-        log_info("Phase 4a: Cloning Repositories")
-        log_info("="*60)
+        log_section("Phase 4a: Cloning Repositories")
 
         # Clone all repositories as top-level directories
         # Note: libvirt-node is now a top-level repo, not nested in backend
@@ -533,37 +639,58 @@ def clone_and_build(context: InstallerContext):
     # Phase 4b: Build libvirt-node (CRITICAL - must be first)
     # =================================================================
     try:
-        log_info("\n" + "="*60)
-        log_info("Phase 4b: Building libvirt-node (Native Addon)")
-        log_info("="*60)
+        log_section("Phase 4b: Building libvirt-node (Native Addon)")
         log_warning("This is a critical step - backend depends on this package")
 
         build_libvirt_node(context)
 
-        # Create symlink from backend/lib/libvirt-node to top-level libvirt-node
+        # Setup libvirt-node as git submodule in backend/lib/libvirt-node
         # This allows backend's package.json to reference it at the expected path
         backend_lib_dir = os.path.join(context.backend_dir, "lib")
-        backend_libvirt_link = os.path.join(backend_lib_dir, "libvirt-node")
+        backend_libvirt_submodule = os.path.join(backend_lib_dir, "libvirt-node")
 
         if not context.dry_run:
             # Ensure backend/lib directory exists
             os.makedirs(backend_lib_dir, exist_ok=True)
 
-            # Remove existing symlink or directory if present
-            if os.path.exists(backend_libvirt_link) or os.path.islink(backend_libvirt_link):
-                if os.path.islink(backend_libvirt_link):
-                    log_debug(f"Removing existing symlink: {backend_libvirt_link}")
-                    os.unlink(backend_libvirt_link)
-                elif os.path.isdir(backend_libvirt_link):
-                    log_warning(f"Found directory at {backend_libvirt_link}, removing to create symlink")
-                    shutil.rmtree(backend_libvirt_link)
+            # Remove existing symlink or directory if present (but not if it's already a proper submodule)
+            if os.path.exists(backend_libvirt_submodule) or os.path.islink(backend_libvirt_submodule):
+                # Check if it's a git submodule
+                is_submodule = os.path.exists(os.path.join(backend_libvirt_submodule, ".git"))
 
-            # Create symlink
-            log_info(f"Creating symlink: {backend_libvirt_link} → {context.libvirt_node_dir}")
-            os.symlink(context.libvirt_node_dir, backend_libvirt_link)
-            log_success("Symlink created successfully")
+                if os.path.islink(backend_libvirt_submodule):
+                    log_warning(f"Removing existing symlink: {backend_libvirt_submodule}")
+                    os.unlink(backend_libvirt_submodule)
+                elif is_submodule:
+                    log_info("libvirt-node submodule already exists, skipping")
+                elif os.path.isdir(backend_libvirt_submodule):
+                    log_warning(f"Found non-submodule directory at {backend_libvirt_submodule}, removing")
+                    shutil.rmtree(backend_libvirt_submodule)
+
+            # Add as git submodule if not already present
+            if not os.path.exists(backend_libvirt_submodule):
+                log_info(f"Adding libvirt-node as git submodule in backend/lib/")
+
+                # Get the relative path from libvirt-node to backend for submodule
+                # We'll use the top-level libvirt-node directory as the source
+                try:
+                    run_command(
+                        f"git submodule add ../../libvirt-node lib/libvirt-node",
+                        cwd=context.backend_dir,
+                        timeout=30
+                    )
+                    log_success("Git submodule added successfully")
+                except subprocess.CalledProcessError:
+                    # Submodule might already be registered in .gitmodules
+                    log_info("Submodule already registered, initializing...")
+                    run_command(
+                        "git submodule update --init lib/libvirt-node",
+                        cwd=context.backend_dir,
+                        timeout=30
+                    )
+                    log_success("Git submodule initialized successfully")
         else:
-            log_info(f"[DRY RUN] Would create symlink: {backend_libvirt_link} → {context.libvirt_node_dir}")
+            log_info(f"[DRY RUN] Would add git submodule: lib/libvirt-node → ../../libvirt-node")
 
     except RuntimeError as e:
         log_error(f"libvirt-node build failed: {e}")
@@ -583,9 +710,7 @@ def clone_and_build(context: InstallerContext):
     # Phase 4c: Build Backend
     # =================================================================
     try:
-        log_info("\n" + "="*60)
-        log_info("Phase 4c: Building Backend")
-        log_info("="*60)
+        log_section("Phase 4c: Building Backend")
 
         build_backend(context)
 
@@ -600,9 +725,7 @@ def clone_and_build(context: InstallerContext):
     # Phase 4d: Build Frontend
     # =================================================================
     try:
-        log_info("\n" + "="*60)
-        log_info("Phase 4d: Building Frontend")
-        log_info("="*60)
+        log_section("Phase 4d: Building Frontend")
 
         build_frontend(context)
 
@@ -617,9 +740,7 @@ def clone_and_build(context: InstallerContext):
     # Phase 4e: Build Infiniservice
     # =================================================================
     try:
-        log_info("\n" + "="*60)
-        log_info("Phase 4e: Building Infiniservice")
-        log_info("="*60)
+        log_section("Phase 4e: Building Infiniservice")
 
         build_infiniservice(context)
 
@@ -633,9 +754,7 @@ def clone_and_build(context: InstallerContext):
     # =================================================================
     # Final Verification
     # =================================================================
-    log_info("\n" + "="*60)
-    log_info("Verifying All Builds")
-    log_info("="*60)
+    log_section("Verifying All Builds")
 
     try:
         # Verify libvirt-node
@@ -646,11 +765,13 @@ def clone_and_build(context: InstallerContext):
         if os.path.exists(tgz_path):
             log_success("libvirt-node: ✓ infinibay-libvirt-node-0.0.1.tgz")
 
-        # Verify symlink from backend/lib/libvirt-node to libvirt-node
-        backend_libvirt_link = os.path.join(context.backend_dir, "lib", "libvirt-node")
-        if os.path.islink(backend_libvirt_link):
-            link_target = os.readlink(backend_libvirt_link)
-            log_success(f"Backend: ✓ lib/libvirt-node symlink → {link_target}")
+        # Verify libvirt-node submodule in backend/lib/
+        backend_libvirt_submodule = os.path.join(context.backend_dir, "lib", "libvirt-node")
+        if os.path.exists(backend_libvirt_submodule):
+            if os.path.exists(os.path.join(backend_libvirt_submodule, ".git")):
+                log_success(f"Backend: ✓ lib/libvirt-node (git submodule)")
+            else:
+                log_success(f"Backend: ✓ lib/libvirt-node (directory)")
 
         # Verify backend
         backend_node_modules = os.path.join(context.backend_dir, "node_modules")
@@ -676,9 +797,11 @@ def clone_and_build(context: InstallerContext):
     # =================================================================
     # Success Summary
     # =================================================================
-    log_info("\n" + "="*60)
+    print()  # Empty line before summary
+    print(f"{GREEN}{'='*60}{RESET}")
     log_success("All repositories cloned and built successfully!")
-    log_info("="*60 + "\n")
+    print(f"{GREEN}{'='*60}{RESET}")
+    print()  # Empty line after summary
 
     log_info("Build summary:")
     log_info(f"  ✓ Backend: {context.backend_dir}")

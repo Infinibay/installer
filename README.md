@@ -35,6 +35,25 @@ pip3 install asciimatics
 sudo python3 install.py
 ```
 
+### Uninstallation
+
+```bash
+# Remove services only (keep files and database)
+sudo python3 uninstall.py
+
+# Remove services and files (keep database)
+sudo python3 uninstall.py --remove-files
+
+# Full uninstall (remove everything)
+sudo python3 uninstall.py --remove-files --remove-database
+
+# Preview what would be removed
+sudo python3 uninstall.py --remove-files --remove-database --dry-run
+
+# Skip confirmation prompts
+sudo python3 uninstall.py --remove-files --yes
+```
+
 This will:
 - Auto-detect your host IP address
 - Generate a secure database password
@@ -58,7 +77,48 @@ sudo python3 install.py --install-dir=/opt/custom/path
 
 # Custom ports
 sudo python3 install.py --backend-port=8080 --frontend-port=8081
+```
 
+### Development Mode: Install from Local Code
+
+If you already have the code cloned in a directory (e.g., `/home/user/infinibay`), you can install directly from it:
+
+```bash
+# Install using your existing code directory
+# This will:
+#   - Use your existing code (no git clone)
+#   - Build dependencies
+#   - Generate .env files
+#   - Create systemd services
+sudo python3 install.py --install-dir=/home/user/infinibay
+
+# Example for your case:
+cd /home/andres/infinibay
+sudo python3 installer/install.py --install-dir=/home/andres/infinibay
+```
+
+**How it works**:
+- If the directory exists with `.git`: Skips cloning
+- If the directory exists without `.git`: Uses as local development code
+- Then proceeds with build, .env generation, and service creation
+- **Preserves file ownership**: Restores original ownership after npm/cargo builds
+
+**Quick development install script**:
+```bash
+# Even simpler - use the provided script
+cd /home/andres/infinibay
+sudo ./installer/install-dev.sh
+```
+
+This script automatically:
+- Detects your repository location
+- Verifies all required directories exist
+- Asks for confirmation
+- Runs the installer with correct parameters
+
+### Skip ISO Downloads
+
+```bash
 # Skip ISO downloads
 sudo python3 install.py --skip-isos
 sudo python3 install.py --skip-windows-isos
@@ -68,6 +128,44 @@ sudo python3 install.py --dry-run
 
 # Verbose logging
 sudo python3 install.py --verbose
+```
+
+### For Private Repositories
+
+If you're installing from private GitHub repositories, you'll need authentication:
+
+**Option 1: GitHub Personal Access Token** (Recommended)
+```bash
+# 1. Generate token at: https://github.com/settings/tokens
+#    - Token type: Classic or Fine-grained
+#    - Scopes needed: 'repo' (full control of private repositories)
+#    - Expiration: Set as needed
+
+# 2. When Git prompts for credentials:
+#    Username: your-github-username
+#    Password: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # Use your token, NOT your GitHub password
+
+# 3. Save credentials (optional, for convenience)
+git config --global credential.helper store
+```
+
+**Option 2: Use Local Repositories** (For Development)
+```bash
+# Clone repos manually to your home directory first
+cd ~
+git clone https://github.com/infinibay/backend.git
+git clone https://github.com/infinibay/frontend.git
+git clone https://github.com/infinibay/infiniservice.git
+
+# Then run installer with local repos
+sudo python3 install.py --use-local-repos --local-repos-dir=$HOME
+```
+
+**Option 3: SSH Keys**
+```bash
+# If you prefer SSH over HTTPS, modify REPO_URLS in lib/repos.py:
+# Change: 'https://github.com/infinibay/backend.git'
+# To:     'git@github.com:infinibay/backend.git'
 ```
 
 ### Combined Options
@@ -171,6 +269,45 @@ The installer provides an interactive troubleshooting guide if PostgreSQL connec
 - How to configure authentication (pg_hba.conf)
 - How to restart the PostgreSQL service
 
+### Invalid Port Number in Database URL
+
+If you see:
+```
+Error: P1013: The provided database string is invalid. invalid port number in database URL
+```
+
+**Cause**: The auto-generated database password contains special characters (like `:` or `@`) that weren't properly encoded in the connection string.
+
+**Solution**: This is now automatically fixed! The installer URL-encodes passwords using `quote_plus()`. If you still encounter this:
+- Use a simple password without special characters: `--db-password=SimplePass123`
+- Or let the installer regenerate (it now encodes properly)
+
+### GitHub Authentication Required
+
+If you see:
+```
+fatal: could not read Username for 'https://github.com'
+Authentication failed for 'https://github.com/...'
+```
+
+**Cause**: The repositories are private and require authentication.
+
+**Solutions**:
+1. **Use GitHub Personal Access Token**:
+   - Generate at https://github.com/settings/tokens
+   - When Git prompts, use token as password (NOT your GitHub password)
+   - Token needs 'repo' scope for private repositories
+
+2. **Use local repositories** (recommended for development):
+   ```bash
+   sudo python3 install.py --use-local-repos --local-repos-dir=/home/youruser/infinibay
+   ```
+
+3. **Configure credential helper** (saves token):
+   ```bash
+   git config --global credential.helper store
+   ```
+
 ### Build Failures
 
 If dependency builds fail, check:
@@ -178,6 +315,31 @@ If dependency builds fail, check:
 - Sufficient disk space
 - Required system packages installed
 - Build logs in verbose mode: `sudo python3 install.py --verbose`
+
+### libvirt-node Integrity Checksum Error
+
+If you see an error like:
+
+```
+npm ERR! sha512-XXX integrity checksum failed when using sha512:
+wanted sha512-XXX but got sha512-YYY
+```
+
+**Cause**: The `@infinibay/libvirt-node` package was rebuilt, changing the `.tgz` file hash, but `package-lock.json` still has the old hash cached.
+
+**Solution**: The installer automatically fixes this by:
+1. Cleaning npm cache before backend installation
+2. Removing `package-lock.json` to regenerate with current hash
+
+**Manual fix** (if needed):
+```bash
+cd /opt/infinibay/backend
+npm cache clean --force
+rm package-lock.json
+npm install
+```
+
+**Note for developers**: If you frequently modify libvirt-node, the installer will automatically handle hash mismatches on each run. The `.tgz` package is rebuilt during Phase 4b, and the hash is refreshed during Phase 4c.
 
 ### Port Already in Use
 
@@ -246,6 +408,24 @@ Each phase is implemented in a separate module under `lib/`. To add a new phase:
 - `utils.py`: Uses `logger.py` (for command logging)
 - `config.py`: Uses `os_detect.py` and `utils.py`
 - Phase modules: Use `config.py` and `utils.py`
+
+## Uninstallation Options
+
+The uninstaller provides granular control over what gets removed:
+
+| Option | What it removes | What it keeps |
+|--------|----------------|---------------|
+| Default | Services only | Files, Database |
+| `--remove-files` | Services + Files | Database |
+| `--remove-database` | Services + Database | Files |
+| `--remove-files --remove-database` | Everything | Nothing |
+
+**Additional flags:**
+- `--dry-run` - Preview changes without executing
+- `--yes` or `-y` - Skip confirmation prompts
+- `--verbose` - Show detailed logging
+- `--install-dir` - Specify custom installation directory
+- `--db-name` / `--db-user` - Specify custom database/user names
 
 ## Version
 

@@ -133,6 +133,17 @@ Examples:
         help='Installation directory (default: /opt/infinibay)'
     )
     install_group.add_argument(
+        '--use-local-repos',
+        action='store_true',
+        help='Use local repository code instead of cloning from GitHub (useful for development)'
+    )
+    install_group.add_argument(
+        '--local-repos-dir',
+        type=validate_absolute_path,
+        default=None,
+        help='Path to local repositories directory (e.g., /home/user/infinibay)'
+    )
+    install_group.add_argument(
         '--skip-isos',
         action='store_true',
         help='Skip downloading Ubuntu/Fedora ISOs'

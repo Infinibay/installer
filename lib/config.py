@@ -6,6 +6,7 @@ Manages all settings and provides computed properties for paths and URLs.
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote_plus
 
 from .os_detect import OSInfo
 from .utils import generate_random_password, detect_host_ip, validate_ip_address
@@ -46,9 +47,17 @@ class InstallerContext:
 
     @property
     def database_url(self) -> str:
-        """PostgreSQL connection string for Prisma."""
+        """
+        PostgreSQL connection string for Prisma.
+
+        Note: Password is URL-encoded to handle special characters safely.
+        Special chars like : @ / ? # [ ] need encoding in connection strings.
+        """
+        # URL-encode the password to handle special characters
+        encoded_password = quote_plus(self.db_password)
+
         return (
-            f"postgresql://{self.db_user}:{self.db_password}"
+            f"postgresql://{self.db_user}:{encoded_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}?schema=public"
         )
 

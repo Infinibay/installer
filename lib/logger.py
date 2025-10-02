@@ -70,6 +70,20 @@ def log_command(command: str):
         print(f"{GRAY}$ {command}{RESET}")
 
 
+def log_section(title: str):
+    """
+    Log a section header with consistent formatting.
+
+    Args:
+        title: Section title (e.g., "Phase 4a: Cloning Repositories")
+    """
+    separator = "=" * 60
+    print()  # Empty line before section
+    print(f"{BLUE}{separator}{RESET}")
+    print(f"{BLUE}{INFO}{RESET} {BOLD}{title}{RESET}")
+    print(f"{BLUE}{separator}{RESET}")
+
+
 def print_animated_waves():
     """Print animated ocean waves effect (Infinite Bay concept)."""
     try:

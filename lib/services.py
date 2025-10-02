@@ -12,7 +12,7 @@ import os
 import subprocess
 import time
 from .config import InstallerContext
-from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug
+from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section
 from .utils import run_command, generate_random_password
 
 
@@ -48,9 +48,13 @@ def generate_backend_env(context: InstallerContext):
     # Generate JWT secret
     tokenkey = generate_random_password(32)
 
+    # Build database URL with URL-encoded password for special characters
+    # The .env file stores the encoded version since Prisma reads it directly
+    database_url = context.database_url
+
     # Build .env content with all variables from backend/.env.example
     env_content = f"""# Database
-DATABASE_URL="{context.database_url}"
+DATABASE_URL="{database_url}"
 
 # CORS
 FRONTEND_URL="*"
@@ -369,26 +373,57 @@ def enable_and_start_service(name: str, context: InstallerContext):
 
         log_debug(f"Service {name} started")
 
-        # Wait for service to initialize
-        time.sleep(3)
+        # Wait for service to activate (with retries)
+        # Node.js services can take time to initialize
+        max_wait_seconds = 30
+        check_interval = 2
+        elapsed = 0
 
-        # Verify service is running
-        result = run_command(f"systemctl is-active {name}", timeout=10)
-        if result.success and result.stdout.strip() == "active":
-            log_success(f"Service {name} is running")
-        else:
-            # Get detailed status
-            status_result = run_command(f"systemctl status {name}", timeout=10)
-            log_error(f"Service {name} is not active")
-            log_error("Service status:")
-            if status_result.stdout:
-                for line in status_result.stdout.split('\n')[:10]:
-                    log_error(f"  {line}")
-            log_error("Check logs with:")
-            log_error(f"  journalctl -u {name} -n 50")
-            raise RuntimeError(f"Service {name} failed to start")
+        log_info(f"Waiting for {name} to activate (timeout: {max_wait_seconds}s)...")
 
-        log_info(f"Service {name} enabled and started successfully")
+        while elapsed < max_wait_seconds:
+            result = run_command(f"systemctl is-active {name}", timeout=10, check=False)
+            status = result.stdout.strip()
+
+            if status == "active":
+                log_success(f"Service {name} is running")
+                log_info(f"Service {name} enabled and started successfully")
+                return
+            elif status == "activating":
+                log_debug(f"Service {name} is still activating... ({elapsed}s)")
+                time.sleep(check_interval)
+                elapsed += check_interval
+            elif status == "failed":
+                # Service failed to start - get detailed status
+                status_result = run_command(f"systemctl status {name}", timeout=10, check=False)
+                log_error(f"Service {name} failed to start")
+                log_error("Service status:")
+                if status_result.stdout:
+                    for line in status_result.stdout.split('\n')[:15]:
+                        log_error(f"  {line}")
+                log_error("Check logs with:")
+                log_error(f"  journalctl -u {name} -n 50 --no-pager")
+                raise RuntimeError(f"Service {name} failed to start")
+            else:
+                # Unknown status - wait and retry
+                log_debug(f"Service {name} status: {status} ({elapsed}s)")
+                time.sleep(check_interval)
+                elapsed += check_interval
+
+        # Timeout reached - service still not active
+        log_warning(f"Service {name} did not fully activate within {max_wait_seconds}s")
+        log_warning(f"Current status: {status}")
+
+        # Get detailed status for debugging
+        status_result = run_command(f"systemctl status {name}", timeout=10, check=False)
+        log_warning("Service status:")
+        if status_result.stdout:
+            for line in status_result.stdout.split('\n')[:15]:
+                log_warning(f"  {line}")
+
+        log_info(f"Service {name} may still be starting in the background")
+        log_info(f"Check status with: systemctl status {name}")
+        log_info(f"Check logs with: journalctl -u {name} -n 50 --no-pager")
 
     except subprocess.TimeoutExpired:
         log_error(f"Systemctl command timed out for service {name}")
@@ -417,7 +452,7 @@ def create_services(context: InstallerContext):
     log_info("This is the final phase of installation...")
 
     # Phase 5a: Generate configuration files
-    log_info("\n=== Generating Configuration Files ===")
+    log_section("Generating Configuration Files")
     try:
         generate_backend_env(context)
         generate_frontend_env(context)
@@ -428,7 +463,7 @@ def create_services(context: InstallerContext):
         raise RuntimeError("Configuration generation failed")
 
     # Phase 5b: Run backend setup
-    log_info("\n=== Running Backend Setup ===")
+    log_section("Running Backend Setup")
     log_warning("This may take several minutes...")
     try:
         run_backend_setup(context)
@@ -444,7 +479,7 @@ def create_services(context: InstallerContext):
         raise RuntimeError("Backend setup failed")
 
     # Phase 5c: Create systemd services
-    log_info("\n=== Creating Systemd Services ===")
+    log_section("Creating Systemd Services")
     try:
         # Create backend service
         create_systemd_service(
@@ -471,7 +506,7 @@ def create_services(context: InstallerContext):
         raise RuntimeError("Service creation failed")
 
     # Phase 5d: Enable and start services
-    log_info("\n=== Starting Services ===")
+    log_section("Starting Services")
     try:
         # Start backend
         enable_and_start_service("infinibay-backend", context)
