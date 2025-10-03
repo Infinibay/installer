@@ -203,20 +203,13 @@ def main():
             display_installation_summary(installer_context)
 
         except NotImplementedError as e:
-            # Expected during Phase 1 - framework is complete, phases 2-5 are stubs
-            logger.log_warning("Phase not yet implemented:")
+            # This should not happen - all phases are implemented
+            logger.log_error("Unexpected NotImplementedError:")
             logger.log_info(str(e))
             print()
-            logger.log_success("Framework Phase 1 Complete!")
-            logger.log_info("Phases 2-5 will be implemented in future releases")
-            print()
-            logger.log_info("Current Status:")
-            logger.log_success("  ✓ Phase 1: Framework initialization (COMPLETE)")
-            logger.log_info("    → Phase 2: System dependencies (TODO)")
-            logger.log_info("    → Phase 3: Database setup (TODO)")
-            logger.log_info("    → Phase 4: Repository cloning and building (TODO)")
-            logger.log_info("    → Phase 5: Service creation and configuration (TODO)")
-            return 0
+            logger.log_error("This is a bug - all phases should be implemented")
+            logger.log_info("Please report this issue on GitHub")
+            return 1
 
     except KeyboardInterrupt:
         print()

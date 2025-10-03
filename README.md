@@ -6,6 +6,17 @@ Automated installation framework for the Infinibay virtualization management pla
 
 This installer automates the complete setup of Infinibay on supported Linux distributions. It handles system package installation, database configuration, repository cloning, dependency building, and service deployment.
 
+**Key Features:**
+- ✓ Fully automated installation with smart defaults
+- ✓ Interactive troubleshooting for database setup
+- ✓ Development mode for local code installation
+- ✓ Automatic dependency building in correct order
+- ✓ URL-encoded database passwords for special characters
+- ✓ Systemd service creation and management
+- ✓ Comprehensive dry-run mode
+- ✓ Granular uninstallation options
+- ✓ Animated ocean waves banner (because why not?)
+
 **Supported Operating Systems:**
 - Ubuntu 23.10 or later
 - Fedora 37 or later
@@ -178,6 +189,27 @@ sudo python3 install.py \
   --verbose
 ```
 
+## Command-Line Options Reference
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--db-password` | *auto-generated* | PostgreSQL password for infinibay user |
+| `--db-user` | `infinibay` | PostgreSQL username |
+| `--db-host` | `localhost` | PostgreSQL host |
+| `--db-port` | `5432` | PostgreSQL port |
+| `--db-name` | `infinibay` | PostgreSQL database name |
+| `--host-ip` | *auto-detected* | Host IP address for VMs to connect |
+| `--bridge-name` | `br0` | Network bridge name |
+| `--backend-port` | `4000` | Backend GraphQL server port |
+| `--frontend-port` | `3000` | Frontend web server port |
+| `--install-dir` | `/opt/infinibay` | Installation directory |
+| `--use-local-repos` | `false` | Use local repository code instead of cloning |
+| `--local-repos-dir` | - | Path to local repositories directory |
+| `--skip-isos` | `false` | Skip downloading Ubuntu/Fedora ISOs |
+| `--skip-windows-isos` | `false` | Skip downloading Windows ISOs |
+| `--dry-run` | `false` | Show what would be done without executing |
+| `--verbose` | `false` | Enable verbose logging |
+
 ## What It Does
 
 The installer executes the following phases:
@@ -189,7 +221,7 @@ The installer executes the following phases:
 - Generate secure defaults (IP detection, password generation)
 - Create installation context
 
-### Phase 2: System Dependencies (Coming Soon)
+### Phase 2: System Dependencies ✓
 - Update package cache (apt/dnf)
 - Install required packages:
   - Node.js and npm
@@ -200,7 +232,7 @@ The installer executes the following phases:
 - Enable and start system services
 - Verify KVM support
 
-### Phase 3: Database Setup (Coming Soon)
+### Phase 3: Database Setup ✓
 - Test PostgreSQL connectivity
 - Interactive troubleshooting guide if connection fails
 - Create `infinibay` database user
@@ -208,7 +240,7 @@ The installer executes the following phases:
 - Grant necessary privileges
 - Verify permissions
 
-### Phase 4: Repository Setup (Coming Soon)
+### Phase 4: Repository Setup ✓
 - Clone repositories from GitHub:
   - backend
   - frontend
@@ -219,8 +251,9 @@ The installer executes the following phases:
   2. Backend (npm install + Prisma generate)
   3. Frontend (npm install)
   4. Infiniservice (cargo build --release)
+- Automatic npm cache cleaning and package-lock.json regeneration for libvirt-node
 
-### Phase 5: Configuration & Services (Coming Soon)
+### Phase 5: Configuration & Services ✓
 - Generate backend `.env` configuration
 - Generate frontend `.env` configuration
 - Run database migrations
@@ -229,20 +262,17 @@ The installer executes the following phases:
 - Enable and start services
 - Display installation summary
 
-## Default Values
+## Installation Flow Summary
 
-| Setting | Default Value | Description |
-|---------|--------------|-------------|
-| Installation Directory | `/opt/infinibay/` | Base installation path |
-| Database Host | `localhost` | PostgreSQL server |
-| Database Port | `5432` | PostgreSQL port |
-| Database User | `infinibay` | Database username |
-| Database Password | *auto-generated* | 32-character secure password |
-| Database Name | `infinibay` | Database name |
-| Host IP | *auto-detected* | Primary network interface IP |
-| Bridge Name | `br0` | Libvirt network bridge |
-| Backend Port | `4000` | GraphQL API server port |
-| Frontend Port | `3000` | Next.js web interface port |
+The installer follows this logical sequence:
+
+1. **Pre-flight checks**: Root privileges, OS compatibility
+2. **System packages**: Install Node.js, PostgreSQL, QEMU/KVM, Rust, build tools
+3. **Database setup**: Create PostgreSQL user and database with interactive troubleshooting
+4. **Repository setup**: Clone or use local repos, build in dependency order
+5. **Configuration**: Generate .env files with proper password encoding
+6. **Service deployment**: Create and start systemd services
+7. **Post-install**: Run migrations, setup backend (ISOs, network filters)
 
 ## Troubleshooting
 
@@ -376,9 +406,12 @@ installer/
 - **No external dependencies**: Uses only Python standard library for maximum portability
 - **Dataclass-based config**: `InstallerContext` carries all settings between phases
 - **Smart defaults with overrides**: Auto-detection with CLI flag overrides
-- **Colored output**: ANSI escape codes for visual clarity
+- **Colored output**: ANSI escape codes for visual clarity with animated banner
 - **Dry-run mode**: Preview changes before execution
 - **Verbose logging**: Optional detailed command output
+- **Robust error handling**: Interactive troubleshooting for common issues
+- **Development-friendly**: Local code installation and automatic ownership restoration
+- **Build optimization**: Automatic npm cache cleanup and hash mismatch resolution
 
 ## Development
 
@@ -429,7 +462,7 @@ The uninstaller provides granular control over what gets removed:
 
 ## Version
 
-Current version: **1.0.0** (Phase 1 - Framework Complete)
+Current version: **2.0.0** (All Phases Complete)
 
 ## License
 
@@ -454,4 +487,4 @@ Once installation completes successfully:
 
 ---
 
-**Note**: This installer is currently in Phase 1 (framework complete). Phases 2-5 are stubs and will be implemented in subsequent releases.
+**Note**: The installer is fully complete and production-ready. All phases (1-5) have been implemented and tested.
