@@ -458,14 +458,16 @@ def build_backend(context: InstallerContext):
 
 def build_frontend(context: InstallerContext):
     """
-    Build frontend dependencies.
+    Build frontend dependencies and production build.
 
     Commands:
         cd frontend
         npm install
+        npm run build
 
     Verifies:
         - node_modules exists
+        - .next/BUILD_ID exists (production build artifact)
 
     Args:
         context: Installation configuration context
@@ -473,12 +475,13 @@ def build_frontend(context: InstallerContext):
     Raises:
         RuntimeError: If build fails
     """
-    log_info("Building frontend dependencies...")
+    log_info("Building frontend dependencies and production build...")
 
     # Dry-run mode
     if context.dry_run:
         log_info(f"[DRY RUN] Would run in {context.frontend_dir}:")
         log_info("[DRY RUN]   npm install")
+        log_info("[DRY RUN]   npm run build")
         return
 
     # Check if directory exists
@@ -486,8 +489,8 @@ def build_frontend(context: InstallerContext):
         raise RuntimeError(f"Frontend directory not found: {context.frontend_dir}")
 
     try:
-        # npm install
-        log_info("Installing frontend dependencies...")
+        # Step 1: npm install
+        log_info("Step 1/2: Installing frontend dependencies...")
         try:
             run_command("npm install", cwd=context.frontend_dir, timeout=900)
         except subprocess.CalledProcessError as e:
@@ -505,7 +508,28 @@ def build_frontend(context: InstallerContext):
         verify_directory_exists(node_modules_path, "Frontend node_modules")
 
         log_success("Frontend dependencies installed successfully")
-        log_info("Note: Frontend will be started in production mode (next start) in Phase 5")
+
+        # Step 2: npm run build
+        log_info("Step 2/2: Building Next.js production bundle...")
+        try:
+            run_command("npm run build", cwd=context.frontend_dir, timeout=900)
+        except subprocess.CalledProcessError as e:
+            log_error("npm run build failed for frontend")
+            log_error("Possible issues:")
+            log_error("  - Check for TypeScript errors")
+            log_error("  - Check for missing environment variables")
+            log_error("  - Verify GraphQL codegen has been run")
+            if e.stderr:
+                log_error(f"Error output: {e.stderr}")
+            raise RuntimeError("Failed to build frontend production bundle")
+
+        # Verify .next/BUILD_ID exists (required for next start)
+        build_id_path = os.path.join(context.frontend_dir, ".next", "BUILD_ID")
+        if not os.path.exists(build_id_path):
+            raise RuntimeError(f"Frontend build incomplete: {build_id_path} not found")
+
+        log_success("Frontend production build completed successfully")
+        log_info("Frontend is ready to be started in production mode (next start)")
 
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out: {e}")
