@@ -14,6 +14,7 @@ import time
 from .config import InstallerContext
 from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section
 from .utils import run_command, generate_random_password
+from .repos import get_directory_owner, restore_ownership
 
 
 def generate_backend_env(context: InstallerContext):
@@ -451,11 +452,30 @@ def create_services(context: InstallerContext):
     log_step(5, 5, "Generating configuration and creating systemd services")
     log_info("This is the final phase of installation...")
 
+    # Detect original owner for dev mode ownership preservation
+    original_owner = get_directory_owner(context.install_dir)
+    if original_owner:
+        log_info(f"Detected non-root owner, will preserve ownership: {original_owner[0]}:{original_owner[1]}")
+
     # Phase 5a: Generate configuration files
     log_section("Generating Configuration Files")
     try:
         generate_backend_env(context)
         generate_frontend_env(context)
+
+        # Restore ownership of .env files in dev mode
+        if original_owner:
+            try:
+                backend_env = os.path.join(context.backend_dir, '.env')
+                frontend_env = os.path.join(context.frontend_dir, '.env')
+                if os.path.exists(backend_env):
+                    os.chown(backend_env, original_owner[0], original_owner[1])
+                if os.path.exists(frontend_env):
+                    os.chown(frontend_env, original_owner[0], original_owner[1])
+                log_debug("Restored ownership of .env files")
+            except Exception as e:
+                log_warning(f"Failed to restore .env ownership: {e}")
+
         log_success("Configuration files generated")
     except Exception as e:
         log_error("Failed to generate configuration files")
@@ -467,6 +487,19 @@ def create_services(context: InstallerContext):
     log_warning("This may take several minutes...")
     try:
         run_backend_setup(context)
+
+        # Restore ownership of setup directories in dev mode
+        if original_owner:
+            try:
+                setup_dirs = ['iso', 'temp', 'uefi', 'disks', 'sockets', 'wallpapers']
+                for dir_name in setup_dirs:
+                    dir_path = os.path.join(context.install_dir, dir_name)
+                    if os.path.exists(dir_path):
+                        restore_ownership(dir_path, original_owner)
+                log_info("Restored ownership of setup directories to original user")
+            except Exception as e:
+                log_warning(f"Failed to restore setup directory ownership: {e}")
+
         log_success("Backend setup completed")
     except Exception as e:
         log_error("Backend setup failed. This is critical for system operation.")
