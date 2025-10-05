@@ -39,6 +39,7 @@ UBUNTU_PACKAGES = [
     'libvirt-dev',
     'libssl-dev',
     'btrfs-progs',
+    'p7zip-full',
 ]
 
 FEDORA_PACKAGES = [
@@ -61,6 +62,7 @@ FEDORA_PACKAGES = [
     'libvirt-devel',
     'openssl-devel',
     'btrfs-progs',
+    'p7zip',
 ]
 
 # Commands that must be available after installation

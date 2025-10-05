@@ -161,6 +161,80 @@ NEXT_PUBLIC_GRAPHQL_API_URL={context.graphql_url}
         raise
 
 
+def setup_libvirt_storage_pool(context: InstallerContext):
+    """
+    Create and configure the infinibay libvirt storage pool.
+
+    Creates:
+    - /var/lib/infinibay/images directory
+    - libvirt storage pool named 'infinibay'
+    - Sets pool to autostart
+
+    Args:
+        context: Installation configuration context
+    """
+    log_info("Setting up libvirt storage pool...")
+
+    if context.dry_run:
+        log_info("[DRY RUN] Would create:")
+        log_info("  - Directory: /var/lib/infinibay/images")
+        log_info("  - Storage pool: infinibay")
+        log_info("  - Set pool to autostart")
+        return
+
+    storage_path = "/var/lib/infinibay/images"
+
+    try:
+        # Create storage directory if it doesn't exist
+        os.makedirs(storage_path, exist_ok=True)
+        os.chmod(storage_path, 0o755)
+        os.chmod("/var/lib/infinibay", 0o755)
+        log_debug(f"Created storage directory: {storage_path}")
+
+        # Check if pool already exists
+        result = run_command("virsh pool-list --all", timeout=10, check=False)
+        if result.success and "infinibay" in result.stdout:
+            log_info("Storage pool 'infinibay' already exists")
+            # Ensure it's started and set to autostart
+            run_command("virsh pool-start infinibay", timeout=10, check=False)
+            run_command("virsh pool-autostart infinibay", timeout=10, check=False)
+            log_success("Storage pool 'infinibay' is active and set to autostart")
+            return
+
+        # Define the pool
+        log_debug("Defining storage pool...")
+        run_command(
+            f'virsh pool-define-as infinibay dir - - - - "{storage_path}"',
+            timeout=30
+        )
+
+        # Build the pool
+        log_debug("Building storage pool...")
+        run_command("virsh pool-build infinibay", timeout=30)
+
+        # Start the pool
+        log_debug("Starting storage pool...")
+        run_command("virsh pool-start infinibay", timeout=30)
+
+        # Set autostart
+        log_debug("Setting pool to autostart...")
+        run_command("virsh pool-autostart infinibay", timeout=30)
+
+        # Verify pool is active
+        result = run_command("virsh pool-list", timeout=10)
+        if "infinibay" in result.stdout and "active" in result.stdout:
+            log_success("Storage pool 'infinibay' created and activated")
+        else:
+            log_warning("Storage pool created but may not be active")
+
+    except subprocess.CalledProcessError as e:
+        log_error(f"Failed to create storage pool: {e}")
+        raise RuntimeError("Storage pool creation failed")
+    except Exception as e:
+        log_error(f"Unexpected error creating storage pool: {e}")
+        raise
+
+
 def run_backend_setup(context: InstallerContext):
     """
     Run backend setup script.
@@ -482,7 +556,17 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Configuration generation failed")
 
-    # Phase 5b: Run backend setup
+    # Phase 5b: Setup libvirt storage pool
+    log_section("Setting up Libvirt Storage Pool")
+    try:
+        setup_libvirt_storage_pool(context)
+        log_success("Libvirt storage pool configured")
+    except Exception as e:
+        log_error("Failed to setup libvirt storage pool")
+        log_error(f"Error: {e}")
+        raise RuntimeError("Storage pool setup failed")
+
+    # Phase 5c: Run backend setup
     log_section("Running Backend Setup")
     log_warning("This may take several minutes...")
     try:
@@ -511,7 +595,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Backend setup failed")
 
-    # Phase 5c: Create systemd services
+    # Phase 5d: Create systemd services
     log_section("Creating Systemd Services")
     try:
         # Create backend service
@@ -538,7 +622,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Service creation failed")
 
-    # Phase 5d: Enable and start services
+    # Phase 5e: Enable and start services
     log_section("Starting Services")
     try:
         # Start backend
@@ -556,7 +640,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Service startup failed")
 
-    # Phase 5e: Display installation summary
+    # Phase 5f: Display installation summary
     log_success("\n" + "="*70)
     log_success("🎉 INFINIBAY INSTALLATION COMPLETED SUCCESSFULLY! 🎉")
     log_success("="*70 + "\n")
