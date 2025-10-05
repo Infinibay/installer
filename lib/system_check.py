@@ -258,15 +258,21 @@ def enable_and_start_services(context: InstallerContext):
             except:
                 log_warning(f"Could not start {service}: {e}")
 
-    # Add current user to libvirt group
+    # Add current user to libvirt and kvm groups
     sudo_user = os.environ.get('SUDO_USER')
     if sudo_user and not context.dry_run:
-        try:
-            run_command(f"usermod -aG libvirt {sudo_user}", timeout=10)
-            log_info(f"Added {sudo_user} to libvirt group")
+        groups_added = []
+        for group in ['libvirt', 'kvm']:
+            try:
+                run_command(f"usermod -aG {group} {sudo_user}", timeout=10)
+                groups_added.append(group)
+                log_debug(f"Added {sudo_user} to {group} group")
+            except subprocess.CalledProcessError as e:
+                log_warning(f"Could not add user to {group} group: {e}")
+
+        if groups_added:
+            log_info(f"Added {sudo_user} to groups: {', '.join(groups_added)}")
             log_info("Note: You may need to log out and back in for group changes to take effect")
-        except subprocess.CalledProcessError as e:
-            log_warning(f"Could not add user to libvirt group: {e}")
 
     log_success("All services enabled and started")
 
@@ -360,7 +366,7 @@ def run_system_checks(context: InstallerContext):
         sudo_user = os.environ.get('SUDO_USER')
         if sudo_user:
             log_info(
-                "\nNote: If you were added to the libvirt group, you may need to "
+                "\nNote: If you were added to the libvirt or kvm groups, you may need to "
                 "log out and back in for changes to take effect."
             )
 
