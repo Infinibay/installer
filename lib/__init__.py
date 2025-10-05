@@ -15,6 +15,7 @@ from . import system_check as system_check
 from . import database as database
 from . import repos as repos
 from . import services as services
+from . import virtio_setup as virtio_setup
 
 # Also export commonly used classes and functions for convenience
 # Configuration
@@ -54,6 +55,7 @@ __all__ = [
     'database',
     'repos',
     'services',
+    'virtio_setup',
     # Configuration
     'InstallerContext',
     # Logging

@@ -72,8 +72,14 @@ BCRYPT_ROUNDS=10
 # InfiniService RPC
 RPC_URL="http://localhost:9090"
 
-# Virtualization
-VIRTIO_WIN_ISO_PATH="/var/lib/libvirt/driver/virtio-win-0.1.229.iso"
+# VirtIO Windows Drivers ISO (OPTIONAL - auto-detected if not set)
+# The system will automatically search common locations:
+#   - /usr/share/virtio-win/*.iso (Fedora/RHEL package)
+#   - /var/lib/libvirt/images/virtio-win*.iso (Ubuntu 24.10+)
+#   - {context.iso_permanent_dir}/virtio-win*.iso (Infinibay managed)
+#   - /var/lib/libvirt/driver/virtio-win*.iso (legacy location)
+# Only set this if you want to override auto-detection or use a custom location
+# VIRTIO_WIN_ISO_PATH=/path/to/virtio-win.iso
 
 # Application Configuration
 APP_HOST={context.host_ip}

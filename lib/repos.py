@@ -16,6 +16,7 @@ import shutil
 from .config import InstallerContext
 from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section, GREEN, RESET
 from .utils import run_command, CommandResult
+from .virtio_setup import setup_virtio_drivers
 
 # Repository URLs
 REPO_URLS = {
@@ -488,6 +489,9 @@ def build_frontend(context: InstallerContext):
     if not os.path.exists(context.frontend_dir):
         raise RuntimeError(f"Frontend directory not found: {context.frontend_dir}")
 
+    # Remember original ownership
+    original_owner = get_directory_owner(context.frontend_dir)
+
     try:
         # Step 1: npm install
         log_info("Step 1/2: Installing frontend dependencies...")
@@ -531,6 +535,11 @@ def build_frontend(context: InstallerContext):
         log_success("Frontend production build completed successfully")
         log_info("Frontend is ready to be started in production mode (next start)")
 
+        # Restore original ownership if we're using an existing directory
+        if original_owner:
+            log_info("Restoring original file ownership...")
+            restore_ownership(context.frontend_dir, original_owner)
+
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out: {e}")
         raise RuntimeError("Frontend build timed out")
@@ -568,6 +577,9 @@ def build_infiniservice(context: InstallerContext):
     if not os.path.exists(context.infiniservice_dir):
         raise RuntimeError(f"Infiniservice directory not found: {context.infiniservice_dir}")
 
+    # Remember original ownership
+    original_owner = get_directory_owner(context.infiniservice_dir)
+
     try:
         # cargo build --release
         log_info("Compiling Rust binary (this may take several minutes)...")
@@ -597,6 +609,11 @@ def build_infiniservice(context: InstallerContext):
 
         log_success("Infiniservice compiled successfully")
         log_debug(f"Binary location: {binary_path}")
+
+        # Restore original ownership if we're using an existing directory
+        if original_owner:
+            log_info("Restoring original file ownership...")
+            restore_ownership(context.infiniservice_dir, original_owner)
 
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out after 30 minutes: {e}")
@@ -774,6 +791,27 @@ def clone_and_build(context: InstallerContext):
     except Exception as e:
         log_error(f"Unexpected error during infiniservice build: {e}")
         raise
+
+    # =================================================================
+    # Phase 4f: Setup VirtIO Windows Drivers
+    # =================================================================
+    try:
+        log_section("Phase 4f: Setting up VirtIO Windows Drivers")
+
+        success, iso_path = setup_virtio_drivers(context)
+
+        if success and iso_path:
+            log_success(f"VirtIO drivers ready at: {iso_path}")
+        elif not success:
+            log_warning("VirtIO drivers setup skipped or failed")
+            log_warning("Windows VM creation will not work until VirtIO ISO is available")
+            log_info("You can download it later from:")
+            log_info("  https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/")
+
+    except Exception as e:
+        log_warning(f"VirtIO setup encountered an error: {e}")
+        log_warning("This is not critical - installation will continue")
+        log_info("You can download VirtIO drivers manually later if needed")
 
     # =================================================================
     # Final Verification
