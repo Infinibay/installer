@@ -35,7 +35,9 @@ def display_configuration_summary(context: config.InstallerContext):
     print()
 
     # Installation Paths
-    logger.log_info(f"Installation Directory: {context.install_dir}")
+    logger.log_info(f"Code Directory: {context.install_dir}")
+    if context.data_dir != context.install_dir:
+        logger.log_info(f"Data Directory: {context.data_dir}")
     print()
 
     # Database Configuration
@@ -49,7 +51,7 @@ def display_configuration_summary(context: config.InstallerContext):
     # Network Configuration
     logger.log_info("Network Configuration:")
     logger.log_info(f"  Host IP: {context.host_ip}")
-    logger.log_info(f"  Bridge: {context.bridge_name}")
+    logger.log_info(f"  Network: {context.network_name}")
     logger.log_info(f"  Backend Port: {context.backend_port}")
     logger.log_info(f"  Frontend Port: {context.frontend_port}")
     print()
@@ -78,7 +80,7 @@ def display_dry_run_summary(context: config.InstallerContext):
     logger.log_step(1, 5, "Framework initialization (completed)")
     logger.log_step(2, 5, "Would install system dependencies")
     logger.log_info("  - Package manager updates")
-    logger.log_info("  - Node.js, npm, PostgreSQL, QEMU/KVM, libvirt, Rust, Cargo")
+    logger.log_info("  - Node.js, npm, PostgreSQL, Redis, QEMU/KVM, libvirt, Rust, Cargo")
     logger.log_info("  - Build tools and development libraries")
     print()
 

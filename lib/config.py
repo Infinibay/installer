@@ -33,7 +33,7 @@ class InstallerContext:
 
     # Network configuration
     host_ip: str
-    bridge_name: str
+    network_name: str
     backend_port: int
     frontend_port: int
 
@@ -44,6 +44,15 @@ class InstallerContext:
     # Execution options
     dry_run: bool
     verbose: bool
+
+    # Optional fields with defaults
+    data_dir: Optional[str] = None  # If None, uses install_dir
+
+    def __post_init__(self):
+        """Initialize computed properties after dataclass init."""
+        # If data_dir is not specified, use install_dir
+        if self.data_dir is None:
+            self.data_dir = self.install_dir
 
     @property
     def database_url(self) -> str:
@@ -84,37 +93,37 @@ class InstallerContext:
     @property
     def iso_dir(self) -> str:
         """ISO storage directory."""
-        return f"{self.install_dir}/iso"
+        return f"{self.data_dir}/iso"
 
     @property
     def iso_permanent_dir(self) -> str:
         """Permanent ISO storage directory."""
-        return f"{self.install_dir}/iso/permanent"
+        return f"{self.data_dir}/iso/permanent"
 
     @property
     def iso_temp_dir(self) -> str:
         """Temporary ISO storage directory."""
-        return f"{self.install_dir}/iso/temp"
+        return f"{self.data_dir}/iso/temp"
 
     @property
     def disks_dir(self) -> str:
         """VM disk storage directory."""
-        return f"{self.install_dir}/disks"
+        return f"{self.data_dir}/disks"
 
     @property
     def uefi_dir(self) -> str:
         """UEFI firmware directory."""
-        return f"{self.install_dir}/uefi"
+        return f"{self.data_dir}/uefi"
 
     @property
     def sockets_dir(self) -> str:
         """Virtio socket directory."""
-        return f"{self.install_dir}/sockets"
+        return f"{self.data_dir}/sockets"
 
     @property
     def wallpapers_dir(self) -> str:
         """VM wallpapers directory."""
-        return f"{self.install_dir}/wallpapers"
+        return f"{self.data_dir}/wallpapers"
 
     @property
     def backend_url(self) -> str:
@@ -143,6 +152,7 @@ class InstallerContext:
                 'name': self.os_info.pretty_name,
             },
             'install_dir': self.install_dir,
+            'data_dir': self.data_dir,
             'database': {
                 'host': self.db_host,
                 'port': self.db_port,
@@ -153,7 +163,7 @@ class InstallerContext:
             },
             'network': {
                 'host_ip': self.host_ip,
-                'bridge_name': self.bridge_name,
+                'network_name': self.network_name,
                 'backend_port': self.backend_port,
                 'frontend_port': self.frontend_port,
             },
@@ -226,13 +236,14 @@ def create_context_from_args(args: Namespace, os_info: OSInfo) -> InstallerConte
     context = InstallerContext(
         os_info=os_info,
         install_dir=args.install_dir,
+        data_dir=args.data_dir,  # Will be set to install_dir in __post_init__ if None
         db_host=args.db_host,
         db_port=args.db_port,
         db_user=args.db_user,
         db_password=db_password,
         db_name=args.db_name,
         host_ip=host_ip,
-        bridge_name=args.bridge_name,
+        network_name=args.libvirt_network_name,
         backend_port=args.backend_port,
         frontend_port=args.frontend_port,
         skip_isos=args.skip_isos,

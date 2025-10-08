@@ -4,6 +4,7 @@ Phase 2: System dependencies installation.
 This module handles installation of required system packages:
 - Node.js and npm
 - PostgreSQL
+- Redis (for caching and performance optimization)
 - QEMU/KVM and libvirt
 - Rust and Cargo
 - Build tools and development libraries
@@ -15,7 +16,7 @@ import time
 from pathlib import Path
 
 from .config import InstallerContext
-from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug
+from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section
 from .os_detect import OSType, get_package_manager
 from .utils import run_command, command_exists, get_command_version
 
@@ -25,6 +26,7 @@ UBUNTU_PACKAGES = [
     'npm',
     'postgresql',
     'postgresql-contrib',
+    'redis-server',  # Cache for firewall performance optimization
     'qemu-kvm',
     'libvirt-daemon-system',
     'libvirt-clients',
@@ -47,6 +49,7 @@ FEDORA_PACKAGES = [
     'npm',
     'postgresql',
     'postgresql-server',
+    'redis',  # Cache for firewall performance optimization
     'qemu-kvm',
     'libvirt',
     'libvirt-client',
@@ -70,6 +73,7 @@ REQUIRED_COMMANDS = [
     'node',
     'npm',
     'psql',
+    'redis-cli',  # Redis client for cache verification
     'virsh',
     'qemu-system-x86_64',
     'rustc',
@@ -230,7 +234,9 @@ def enable_and_start_services(context: InstallerContext):
     """Enable and start required system services."""
     log_info("Enabling and starting services...")
 
-    services = ['libvirtd', 'postgresql']
+    # Redis service name differs by OS
+    redis_service = 'redis-server' if context.os_info.os_type == OSType.UBUNTU else 'redis'
+    services = ['libvirtd', 'postgresql', redis_service]
 
     for service in services:
         if context.dry_run:
@@ -317,6 +323,36 @@ def check_kvm_support(context: InstallerContext):
         )
 
 
+def setup_libvirt_network_phase(context: InstallerContext):
+    """
+    Setup libvirt network for VM connectivity.
+
+    This is called during system checks after services are started.
+    Network setup is non-critical - failures are logged but don't fail installation.
+
+    Args:
+        context: Installation configuration context
+    """
+    from .network_setup import setup_libvirt_network
+
+    log_section("Setting up libvirt network...")
+
+    # Handle dry-run mode
+    if context.dry_run:
+        log_info("[DRY RUN] Would attempt to configure libvirt network")
+        return
+
+    # Try to setup the libvirt network
+    success = setup_libvirt_network(context)
+
+    if success:
+        log_success("Libvirt network configured successfully")
+    else:
+        log_error("Failed to configure libvirt network automatically")
+        log_warning("You will need to configure the network manually")
+        log_info("See documentation for manual network setup instructions")
+
+
 def run_system_checks(context: InstallerContext):
     """
     Phase 2: Install system dependencies and verify installation.
@@ -353,6 +389,13 @@ def run_system_checks(context: InstallerContext):
 
         # Enable and start services
         enable_and_start_services(context)
+
+        # Setup libvirt network (non-critical)
+        try:
+            setup_libvirt_network_phase(context)
+        except Exception as e:
+            log_warning(f"Libvirt network setup failed: {e}")
+            log_info("You will need to configure the network manually")
 
         # Check KVM support (non-critical)
         try:

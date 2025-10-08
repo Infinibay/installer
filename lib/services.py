@@ -9,8 +9,10 @@ This module handles:
 """
 
 import os
+import shutil
 import subprocess
 import time
+from pathlib import Path
 from .config import InstallerContext
 from .logger import log_step, log_info, log_success, log_warning, log_error, log_debug, log_section
 from .utils import run_command, generate_random_password
@@ -25,7 +27,7 @@ def generate_backend_env(context: InstallerContext):
     - DATABASE_URL: PostgreSQL connection string
     - APP_HOST: Host IP for VM connectivity
     - GRAPHIC_HOST: Host IP for graphics
-    - BRIDGE_NAME: Network bridge name
+    - LIBVIRT_NETWORK_NAME: Libvirt virtual network name
     - INFINIBAY_BASE_DIR: Base installation directory
     - PORT: Backend server port
     - RPC_URL: InfiniService RPC endpoint
@@ -42,7 +44,7 @@ def generate_backend_env(context: InstallerContext):
         log_info(f"[DRY RUN] Would create {context.backend_dir}/.env with:")
         log_info(f"  DATABASE_URL={context.database_url}")
         log_info(f"  APP_HOST={context.host_ip}")
-        log_info(f"  BRIDGE_NAME={context.bridge_name}")
+        log_info(f"  LIBVIRT_NETWORK_NAME={context.network_name}")
         log_info(f"  PORT={context.backend_port}")
         return
 
@@ -83,7 +85,7 @@ RPC_URL="http://localhost:9090"
 
 # Application Configuration
 APP_HOST={context.host_ip}
-INFINIBAY_BASE_DIR={context.install_dir}
+INFINIBAY_BASE_DIR={context.data_dir}
 INFINIBAY_ISO_DIR={context.iso_dir}
 INFINIBAY_ISO_TEMP_DIR={context.iso_temp_dir}
 INFINIBAY_ISO_PERMANENT_DIR={context.iso_permanent_dir}
@@ -92,7 +94,8 @@ INFINIBAY_WALLPAPERS_DIR={context.wallpapers_dir}
 
 # Graphics and Network
 GRAPHIC_HOST={context.host_ip}
-BRIDGE_NAME={context.bridge_name}
+# Libvirt virtual network name for VM connectivity
+LIBVIRT_NETWORK_NAME={context.network_name}
 
 # Timeouts (uncomment to customize)
 # LIBVIRT_CONNECT_TIMEOUT=30000
@@ -238,6 +241,122 @@ def setup_libvirt_storage_pool(context: InstallerContext):
         raise RuntimeError("Storage pool creation failed")
     except Exception as e:
         log_error(f"Unexpected error creating storage pool: {e}")
+        raise
+
+
+def setup_data_directories(context: InstallerContext, owner_uid: int = None, owner_gid: int = None):
+    """
+    Create data directories with proper permissions.
+
+    Args:
+        context: Installation configuration context
+        owner_uid: User ID to set as owner (default: current user if running via sudo)
+        owner_gid: Group ID to set as owner (default: kvm group)
+    """
+    log_info("Setting up data directories...")
+
+    if context.dry_run:
+        log_info(f"[DRY RUN] Would create directories in {context.data_dir}")
+        log_info(f"[DRY RUN] Would set ownership to {owner_uid}:{owner_gid}")
+        return
+
+    import grp
+    import pwd
+
+    # Get kvm group ID
+    try:
+        kvm_gid = grp.getgrnam('kvm').gr_gid
+        if owner_gid is None:
+            owner_gid = kvm_gid
+    except KeyError:
+        log_warning("kvm group not found, using libvirt group instead")
+        try:
+            owner_gid = grp.getgrnam('libvirt').gr_gid
+        except KeyError:
+            log_warning("libvirt group not found, using root group")
+            owner_gid = 0
+
+    # If owner_uid not specified, try to get the sudo user
+    if owner_uid is None:
+        sudo_user = os.environ.get('SUDO_USER')
+        if sudo_user:
+            try:
+                owner_uid = pwd.getpwnam(sudo_user).pw_uid
+                log_debug(f"Using SUDO_USER: {sudo_user} (uid={owner_uid})")
+            except KeyError:
+                log_warning(f"User {sudo_user} not found, using root")
+                owner_uid = 0
+        else:
+            owner_uid = 0
+
+    # Create base data directory
+    os.makedirs(context.data_dir, exist_ok=True)
+    os.chown(context.data_dir, owner_uid, owner_gid)
+    os.chmod(context.data_dir, 0o775)
+    log_debug(f"Created and configured: {context.data_dir}")
+
+    log_success(f"Data directory configured: {context.data_dir}")
+    log_info(f"Owner: {owner_uid}:{owner_gid}")
+
+
+def copy_default_wallpapers(context: InstallerContext, owner_uid: int = None, owner_gid: int = None):
+    """
+    Copy default wallpapers from installer assets to wallpapers directory.
+
+    Args:
+        context: Installation configuration context
+        owner_uid: User ID to set as owner (default: current user if running via sudo)
+        owner_gid: Group ID to set as owner (default: kvm group)
+    """
+    log_info("Copying default wallpapers...")
+
+    if context.dry_run:
+        log_info(f"[DRY RUN] Would copy wallpapers to {context.wallpapers_dir}")
+        return
+
+    # Get installer script directory
+    installer_root = Path(__file__).parent.parent.resolve()
+    assets_wallpapers = installer_root / "assets" / "wallpapers"
+
+    # Check if assets/wallpapers exists
+    if not assets_wallpapers.exists():
+        log_warning(f"Default wallpapers not found in installer: {assets_wallpapers}")
+        log_warning("Skipping wallpaper installation")
+        return
+
+    # Create wallpapers directory if it doesn't exist
+    wallpapers_dest = Path(context.wallpapers_dir)
+    wallpapers_dest.mkdir(parents=True, exist_ok=True)
+
+    # Copy all image files
+    image_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
+    copied_count = 0
+
+    try:
+        for image_file in assets_wallpapers.iterdir():
+            if image_file.is_file() and image_file.suffix.lower() in image_extensions:
+                dest_file = wallpapers_dest / image_file.name
+                shutil.copy2(image_file, dest_file)
+
+                # Set ownership if provided
+                if owner_uid is not None and owner_gid is not None:
+                    os.chown(dest_file, owner_uid, owner_gid)
+
+                # Set readable permissions
+                os.chmod(dest_file, 0o644)
+                copied_count += 1
+                log_debug(f"Copied wallpaper: {image_file.name}")
+
+        if copied_count > 0:
+            log_success(f"Copied {copied_count} default wallpapers to {context.wallpapers_dir}")
+        else:
+            log_warning("No wallpaper files found in assets directory")
+
+    except PermissionError as e:
+        log_error(f"Permission denied copying wallpapers: {e}")
+        raise
+    except Exception as e:
+        log_error(f"Failed to copy wallpapers: {e}")
         raise
 
 
@@ -534,10 +653,32 @@ def create_services(context: InstallerContext):
 
     # Detect original owner for dev mode ownership preservation
     original_owner = get_directory_owner(context.install_dir)
+    owner_uid = None
+    owner_gid = None
     if original_owner:
-        log_info(f"Detected non-root owner, will preserve ownership: {original_owner[0]}:{original_owner[1]}")
+        owner_uid, owner_gid = original_owner
+        log_info(f"Detected non-root owner, will preserve ownership: {owner_uid}:{owner_gid}")
 
-    # Phase 5a: Generate configuration files
+    # Phase 5a: Setup data directories (before backend setup)
+    log_section("Setting up Data Directories")
+    try:
+        setup_data_directories(context, owner_uid=owner_uid, owner_gid=owner_gid)
+        log_success("Data directories configured")
+    except Exception as e:
+        log_error("Failed to setup data directories")
+        log_error(f"Error: {e}")
+        raise RuntimeError("Data directory setup failed")
+
+    # Phase 5a2: Copy default wallpapers
+    log_section("Installing Default Wallpapers")
+    try:
+        copy_default_wallpapers(context, owner_uid=owner_uid, owner_gid=owner_gid)
+    except Exception as e:
+        log_warning("Failed to copy default wallpapers (non-critical)")
+        log_warning(f"Error: {e}")
+        log_info("You can manually add wallpapers to: {context.wallpapers_dir}")
+
+    # Phase 5b: Generate configuration files
     log_section("Generating Configuration Files")
     try:
         generate_backend_env(context)
@@ -562,7 +703,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Configuration generation failed")
 
-    # Phase 5b: Setup libvirt storage pool
+    # Phase 5c: Setup libvirt storage pool
     log_section("Setting up Libvirt Storage Pool")
     try:
         setup_libvirt_storage_pool(context)
@@ -572,7 +713,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Storage pool setup failed")
 
-    # Phase 5c: Run backend setup
+    # Phase 5d: Run backend setup
     log_section("Running Backend Setup")
     log_warning("This may take several minutes...")
     try:
@@ -583,7 +724,7 @@ def create_services(context: InstallerContext):
             try:
                 setup_dirs = ['iso', 'temp', 'uefi', 'disks', 'sockets', 'wallpapers']
                 for dir_name in setup_dirs:
-                    dir_path = os.path.join(context.install_dir, dir_name)
+                    dir_path = os.path.join(context.data_dir, dir_name)
                     if os.path.exists(dir_path):
                         restore_ownership(dir_path, original_owner)
                 log_info("Restored ownership of setup directories to original user")
@@ -601,7 +742,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Backend setup failed")
 
-    # Phase 5d: Create systemd services
+    # Phase 5e: Create systemd services
     log_section("Creating Systemd Services")
     try:
         # Create backend service
@@ -628,7 +769,7 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Service creation failed")
 
-    # Phase 5e: Enable and start services
+    # Phase 5f: Enable and start services
     log_section("Starting Services")
     try:
         # Start backend
@@ -646,16 +787,30 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Service startup failed")
 
-    # Phase 5f: Display installation summary
+    # Phase 5g: Display installation summary
     log_success("\n" + "="*70)
     log_success("🎉 INFINIBAY INSTALLATION COMPLETED SUCCESSFULLY! 🎉")
     log_success("="*70 + "\n")
 
     # Installation summary
     log_info("Installation Summary:")
-    log_info(f"  Installation Directory: {context.install_dir}")
+    log_info(f"  Code Directory: {context.install_dir}")
+    if context.data_dir != context.install_dir:
+        log_info(f"  Data Directory: {context.data_dir}")
     log_info(f"  Host IP Address: {context.host_ip}")
-    log_info(f"  Bridge Name: {context.bridge_name}")
+    log_info(f"  Network Name: {context.network_name}")
+
+    # Check network status
+    from .utils import run_command
+    result = run_command(f'virsh net-info {context.network_name}', check=False, capture_output=True)
+    if result and result.returncode == 0:
+        if 'Active:' in result.stdout and 'yes' in result.stdout.lower():
+            log_success(f"  Libvirt Network Status: ✓ Active")
+        else:
+            log_warning(f"  Libvirt Network Status: ⚠ Exists but not active")
+    else:
+        log_warning(f"  Libvirt Network Status: ✗ Not found (manual setup required)")
+
     log_info("")
 
     # Access URLs
@@ -686,7 +841,7 @@ def create_services(context: InstallerContext):
     log_info("Next Steps:")
     log_info(f"  1. Open your browser and navigate to: {context.frontend_url}")
     log_info("  2. Create your first admin user account")
-    log_info("  3. Configure your network bridge (if not already done)")
+    log_info("  3. Verify network bridge is configured (should be automatic)")
     log_info("  4. Start creating virtual machines!")
     log_info("")
 
@@ -699,6 +854,8 @@ def create_services(context: InstallerContext):
     log_warning(f"    - Backend: {context.backend_port}")
     if context.skip_isos:
         log_warning("  • ISO downloads were skipped. You may need to download them manually.")
+    if result and result.returncode != 0:
+        log_warning("  • Libvirt network setup failed - verify configuration before creating VMs")
     log_info("")
 
     # Final message

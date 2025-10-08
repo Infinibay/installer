@@ -240,6 +240,54 @@ def detect_host_ip() -> str:
     return fallback_ip
 
 
+def detect_primary_interface() -> Optional[str]:
+    """
+    Detect the primary network interface with internet connectivity.
+
+    Returns:
+        Interface name (e.g., 'eth0', 'ens33') or None if detection fails
+    """
+    # Try using ip route to find default interface
+    result = run_command('ip route show default', check=False, capture_output=True)
+    if result and result.returncode == 0:
+        output = result.stdout.strip()
+        log_debug(f"Default route output: {output}")
+
+        # Parse output: "default via 192.168.1.1 dev eth0 proto dhcp metric 100"
+        for line in output.split('\n'):
+            if 'default via' in line and 'dev' in line:
+                parts = line.split()
+                try:
+                    dev_index = parts.index('dev')
+                    if dev_index + 1 < len(parts):
+                        interface = parts[dev_index + 1]
+                        log_debug(f"Detected primary network interface: {interface}")
+                        return interface
+                except (ValueError, IndexError):
+                    continue
+
+    # Fallback: try parsing ip link show
+    result = run_command('ip link show', check=False, capture_output=True)
+    if result and result.returncode == 0:
+        output = result.stdout.strip()
+
+        # Look for interfaces that are 'state UP'
+        for line in output.split('\n'):
+            if 'state UP' in line:
+                # Extract interface name from line like "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>"
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    interface = parts[1].strip()
+
+                    # Exclude loopback, docker, and bridge interfaces
+                    if not any(interface.startswith(prefix) for prefix in ['lo', 'docker', 'br', 'virbr', 'veth']):
+                        log_debug(f"Detected primary network interface: {interface}")
+                        return interface
+
+    log_warning("Could not auto-detect primary network interface")
+    return None
+
+
 def validate_ip_address(ip: str) -> bool:
     """
     Validate IP address format using ipaddress module.

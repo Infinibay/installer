@@ -65,9 +65,12 @@ echo ""
 # Show what will be done
 echo -e "${BLUE}This will:${NC}"
 echo -e "  ${GREEN}✓${NC} Use existing code in: ${REPO_ROOT}"
+echo -e "  ${GREEN}✓${NC} Create data directories in: /opt/infinibay (isos, disks, uefi, wallpapers, etc.)"
+echo -e "  ${GREEN}✓${NC} Set permissions: \$USER:kvm/libvirt on data directories"
 echo -e "  ${GREEN}✓${NC} Build all dependencies (libvirt-node, backend, frontend, infiniservice)"
 echo -e "  ${GREEN}✓${NC} Generate .env configuration files"
 echo -e "  ${GREEN}✓${NC} Setup PostgreSQL database"
+echo -e "  ${GREEN}✓${NC} Setup Redis cache server"
 echo -e "  ${GREEN}✓${NC} Create systemd services"
 echo -e "  ${GREEN}✓${NC} Start services"
 echo ""
@@ -86,10 +89,13 @@ echo -e "${BLUE}Starting installation...${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 
-# Run the installer with the repo root as install-dir
+# Run the installer with:
+# - Code in local repo directory (REPO_ROOT)
+# - Data in /opt/infinibay
 cd "$SCRIPT_DIR"
 python3 install.py \
     --install-dir="$REPO_ROOT" \
+    --data-dir="/opt/infinibay" \
     --verbose \
     "$@"
 

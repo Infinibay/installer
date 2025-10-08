@@ -106,10 +106,10 @@ Examples:
         help='Host IP address for VMs to connect (default: auto-detected)'
     )
     network_group.add_argument(
-        '--bridge-name',
+        '--libvirt-network-name',
         type=str,
-        default='br0',
-        help='Network bridge name (default: br0)'
+        default='default',
+        help='Libvirt network name (default: default)'
     )
     network_group.add_argument(
         '--backend-port',
@@ -131,6 +131,12 @@ Examples:
         type=validate_absolute_path,
         default='/opt/infinibay',
         help='Installation directory (default: /opt/infinibay)'
+    )
+    install_group.add_argument(
+        '--data-dir',
+        type=validate_absolute_path,
+        default=None,
+        help='Data directory for ISOs, disks, etc. (default: same as --install-dir)'
     )
     install_group.add_argument(
         '--use-local-repos',

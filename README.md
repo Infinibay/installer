@@ -68,7 +68,7 @@ sudo python3 uninstall.py --remove-files --yes
 This will:
 - Auto-detect your host IP address
 - Generate a secure database password
-- Use default bridge name (br0)
+- Use default libvirt network (default)
 - Install to `/opt/infinibay/`
 
 ### Custom Installation Options
@@ -80,8 +80,8 @@ sudo python3 install.py --db-password=mySecurePass123
 # With custom host IP (for VM connectivity)
 sudo python3 install.py --host-ip=192.168.1.100
 
-# With custom network bridge
-sudo python3 install.py --bridge-name=virbr0
+# With custom libvirt network
+sudo python3 install.py --libvirt-network-name=default
 
 # Custom installation directory
 sudo python3 install.py --install-dir=/opt/custom/path
@@ -185,7 +185,7 @@ sudo python3 install.py --use-local-repos --local-repos-dir=$HOME
 sudo python3 install.py \
   --host-ip=192.168.1.100 \
   --db-password=SecurePass123 \
-  --bridge-name=br0 \
+  --libvirt-network-name=default \
   --verbose
 ```
 
@@ -199,7 +199,7 @@ sudo python3 install.py \
 | `--db-port` | `5432` | PostgreSQL port |
 | `--db-name` | `infinibay` | PostgreSQL database name |
 | `--host-ip` | *auto-detected* | Host IP address for VMs to connect |
-| `--bridge-name` | `br0` | Network bridge name |
+| `--libvirt-network-name` | `default` | Libvirt virtual network name |
 | `--backend-port` | `4000` | Backend GraphQL server port |
 | `--frontend-port` | `3000` | Frontend web server port |
 | `--install-dir` | `/opt/infinibay` | Installation directory |
@@ -229,7 +229,9 @@ The installer executes the following phases:
   - QEMU/KVM and libvirt
   - Rust and Cargo
   - Build tools and development libraries
+  - bridge-utils
 - Enable and start system services
+- Configure libvirt virtual network automatically
 - Verify KVM support
 
 ### Phase 3: Database Setup ✓
@@ -273,6 +275,113 @@ The installer follows this logical sequence:
 5. **Configuration**: Generate .env files with proper password encoding
 6. **Service deployment**: Create and start systemd services
 7. **Post-install**: Run migrations, setup backend (ISOs, network filters)
+
+## Network Configuration
+
+The installer automatically detects and configures libvirt virtual networks for VM connectivity. This allows VMs to communicate with the host and external networks.
+
+### Automatic Network Setup
+
+By default, the installer will:
+1. Detect existing libvirt virtual networks using `virsh net-list --all`
+2. Select an appropriate network (prefers 'default', then any active network)
+3. If no networks exist, prompt to create a default NAT network named 'infinibay'
+4. Verify the selected network is active and ready
+
+**Network modes supported:**
+- NAT (default) - VMs access external network through host NAT
+- Bridged - VMs connect directly to physical network
+- Isolated - VMs only communicate with host
+
+### Custom Network Selection
+
+To use a specific libvirt network:
+
+```bash
+sudo python3 install.py --libvirt-network-name=your-network
+```
+
+List available networks:
+```bash
+virsh net-list --all
+```
+
+### Manual Network Setup
+
+If you prefer to configure the network manually before installation:
+
+#### Create a NAT network:
+```bash
+# Create network XML file
+cat > /tmp/infinibay-network.xml <<EOF
+<network>
+  <name>infinibay</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-infinibay' stp='on' delay='0'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+EOF
+
+# Define and start the network
+sudo virsh net-define /tmp/infinibay-network.xml
+sudo virsh net-start infinibay
+sudo virsh net-autostart infinibay
+```
+
+#### Using netplan (Ubuntu Server):
+Create `/etc/netplan/01-infinibay-bridge.yaml`:
+```yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth0:
+      dhcp4: no
+      dhcp6: no
+  bridges:
+    br0:
+      interfaces: [eth0]
+      dhcp4: yes
+      dhcp6: yes
+```
+Then apply: `sudo netplan apply`
+
+#### Using bridge-utils (manual):
+```bash
+sudo brctl addbr br0
+sudo brctl addif br0 eth0
+sudo ip link set br0 up
+sudo dhclient br0
+```
+
+### Verifying Bridge Status
+
+After installation, verify the bridge is active:
+```bash
+ip link show br0
+```
+
+Look for `state UP` in the output.
+
+### Examples
+
+```bash
+# Install with custom bridge name
+sudo python3 install.py --bridge-name=virbr1
+
+# Install with manual bridge setup
+sudo python3 install.py --skip-bridge-setup
+
+# Install with specific interface
+sudo python3 install.py --primary-interface=ens33
+
+# Install with custom bridge and interface
+sudo python3 install.py --bridge-name=br1 --primary-interface=enp0s3
+```
 
 ## Troubleshooting
 
@@ -379,6 +488,53 @@ If default ports are occupied, specify custom ports:
 sudo python3 install.py --backend-port=8080 --frontend-port=8081
 ```
 
+### Network Bridge Issues
+
+**Problem**: Bridge creation fails or network connectivity is lost
+
+**Symptoms**:
+- `ip link show br0` shows bridge doesn't exist
+- No internet connectivity after installation
+- VM creation fails with network errors
+
+**Solutions**:
+
+1. **Check NetworkManager/netplan status**:
+   ```bash
+   # For NetworkManager
+   systemctl status NetworkManager
+
+   # For netplan
+   netplan get
+   ```
+
+2. **Restore previous network configuration**:
+   ```bash
+   # If using NetworkManager
+   nmcli connection delete br0
+   nmcli connection up <original-connection>
+
+   # If using netplan
+   sudo rm /etc/netplan/01-infinibay-bridge.yaml
+   sudo cp /etc/netplan/*.yaml.backup /etc/netplan/
+   sudo netplan apply
+   ```
+
+3. **Skip automatic bridge setup and configure manually**:
+   ```bash
+   sudo python3 install.py --skip-bridge-setup
+   # Then follow manual bridge setup instructions above
+   ```
+
+4. **Specify correct primary interface**:
+   ```bash
+   # First, list your interfaces
+   ip link show
+
+   # Then specify the correct one
+   sudo python3 install.py --primary-interface=<your-interface>
+   ```
+
 ## Architecture
 
 The installer uses a modular architecture with clean separation of concerns:
@@ -394,6 +550,7 @@ installer/
 │   ├── privileges.py      # Root/sudo privilege checks
 │   ├── utils.py           # Command execution utilities
 │   ├── config.py          # Configuration context
+│   ├── network_setup.py   # Network bridge configuration
 │   ├── system_check.py    # Phase 2: System packages
 │   ├── database.py        # Phase 3: PostgreSQL setup
 │   ├── repos.py           # Phase 4: Repo cloning & building
