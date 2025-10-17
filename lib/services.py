@@ -71,6 +71,10 @@ PORT={context.backend_port}
 # Security
 BCRYPT_ROUNDS=10
 
+# Default Admin User
+DEFAULT_ADMIN_EMAIL="{context.admin_email}"
+DEFAULT_ADMIN_PASSWORD="{context.admin_password}"
+
 # InfiniService RPC
 RPC_URL="http://localhost:9090"
 
@@ -827,6 +831,13 @@ def create_services(context: InstallerContext):
     log_info(f"  User: {context.db_user}")
     log_info(f"  Password: {context.db_password}")
     log_warning("  ⚠️  Save these credentials securely!")
+    log_info("")
+
+    # Admin user credentials
+    log_info("Admin User Credentials:")
+    log_info(f"  Email: {context.admin_email}")
+    log_info(f"  Password: {context.admin_password}")
+    log_warning("  ⚠️  Change these credentials after first login!")
     log_info("")
 
     # Service management

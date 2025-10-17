@@ -97,6 +97,21 @@ Examples:
         help='PostgreSQL database name (default: infinibay)'
     )
 
+    # Admin user configuration
+    admin_group = parser.add_argument_group('Admin User Configuration')
+    admin_group.add_argument(
+        '--admin-email',
+        type=str,
+        default='admin@example.com',
+        help='Admin user email address (default: admin@example.com)'
+    )
+    admin_group.add_argument(
+        '--admin-password',
+        type=str,
+        default='password',
+        help='Admin user password (default: password)'
+    )
+
     # Network configuration
     network_group = parser.add_argument_group('Network Configuration')
     network_group.add_argument(

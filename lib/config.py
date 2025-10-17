@@ -31,6 +31,10 @@ class InstallerContext:
     db_password: str
     db_name: str
 
+    # Admin user configuration
+    admin_email: str
+    admin_password: str
+
     # Network configuration
     host_ip: str
     network_name: str
@@ -161,6 +165,10 @@ class InstallerContext:
                 'name': self.db_name,
                 'url': self.database_url.replace(self.db_password, '****') if self.db_password else None,
             },
+            'admin_user': {
+                'email': self.admin_email,
+                'password': '****' if self.admin_password else None,
+            },
             'network': {
                 'host_ip': self.host_ip,
                 'network_name': self.network_name,
@@ -242,6 +250,8 @@ def create_context_from_args(args: Namespace, os_info: OSInfo) -> InstallerConte
         db_user=args.db_user,
         db_password=db_password,
         db_name=args.db_name,
+        admin_email=args.admin_email,
+        admin_password=args.admin_password,
         host_ip=host_ip,
         network_name=args.libvirt_network_name,
         backend_port=args.backend_port,

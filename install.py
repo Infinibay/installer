@@ -48,6 +48,12 @@ def display_configuration_summary(context: config.InstallerContext):
     logger.log_info(f"  Password: {'****' if context.db_password else 'Not set'}")
     print()
 
+    # Admin User Configuration
+    logger.log_info("Admin User Configuration:")
+    logger.log_info(f"  Email: {context.admin_email}")
+    logger.log_info(f"  Password: {'****' if context.admin_password else 'Not set'}")
+    print()
+
     # Network Configuration
     logger.log_info("Network Configuration:")
     logger.log_info(f"  Host IP: {context.host_ip}")
@@ -122,8 +128,13 @@ def display_installation_summary(context: config.InstallerContext):
     logger.log_info(f"  Database: {context.db_name}")
     print()
 
+    logger.log_info("Admin User Credentials:")
+    logger.log_info(f"  Email: {context.admin_email}")
+    logger.log_info(f"  Password: {context.admin_password}")
+    print()
+
     logger.log_info("Next Steps:")
-    logger.log_info("  1. Access the web interface and create your admin account")
+    logger.log_info("  1. Access the web interface and log in with your admin credentials")
     logger.log_info("  2. Configure departments and security policies")
     logger.log_info("  3. Create your first virtual machine")
     print()
@@ -175,6 +186,25 @@ def main():
 
         logger.log_success(f"OS version {detected_os.version} is supported")
         print()
+
+        # Prompt for admin credentials if using defaults
+        needs_admin_prompt = (parsed_args.admin_email == 'admin@example.com' or
+                             parsed_args.admin_password == 'password')
+
+        if needs_admin_prompt:
+            logger.log_info("Admin User Configuration:")
+
+            if parsed_args.admin_email == 'admin@example.com':
+                admin_email = input(f"  Enter admin email [admin@example.com]: ").strip()
+                if admin_email:
+                    parsed_args.admin_email = admin_email
+
+            if parsed_args.admin_password == 'password':
+                admin_password = input(f"  Enter admin password [password]: ").strip()
+                if admin_password:
+                    parsed_args.admin_password = admin_password
+
+            print()
 
         # Create installer context
         installer_context = config.create_context_from_args(parsed_args, detected_os)
