@@ -217,6 +217,51 @@ def remove_database(db_name, db_user, dry_run=False):
     return True
 
 
+def remove_rustup(dry_run=False):
+    """
+    Remove rustup Rust toolchain installation.
+
+    Rustup is installed by Infinibay installer and should be cleaned up on uninstall.
+    """
+    logger.log_info("Removing Rust toolchain (rustup)...")
+
+    # Get the user who originally ran the installer
+    sudo_user = os.environ.get('SUDO_USER')
+    user_home = f"/home/{sudo_user}" if sudo_user and sudo_user != 'root' else '/root'
+    cargo_dir = f"{user_home}/.cargo"
+    rustup_dir = f"{user_home}/.rustup"
+
+    # Check if rustup is installed
+    if not os.path.exists(cargo_dir) and not os.path.exists(rustup_dir):
+        logger.log_info("Rustup not found, skipping")
+        return True
+
+    if dry_run:
+        logger.log_info(f"[DRY RUN] Would remove: {cargo_dir}")
+        logger.log_info(f"[DRY RUN] Would remove: {rustup_dir}")
+        return True
+
+    try:
+        # Remove .cargo directory
+        if os.path.exists(cargo_dir):
+            import shutil
+            shutil.rmtree(cargo_dir)
+            logger.log_success(f"Removed: {cargo_dir}")
+
+        # Remove .rustup directory
+        if os.path.exists(rustup_dir):
+            import shutil
+            shutil.rmtree(rustup_dir)
+            logger.log_success(f"Removed: {rustup_dir}")
+
+        logger.log_success("Rust toolchain removed")
+        return True
+
+    except Exception as e:
+        logger.log_error(f"Failed to remove rustup: {e}")
+        return False
+
+
 def confirm_uninstall(args):
     """Ask user to confirm uninstallation."""
     if args.yes:
@@ -292,6 +337,12 @@ def main():
         print()
         logger.log_section("Removing Database")
         remove_database(args.db_name, args.db_user, args.dry_run)
+
+    # Remove rustup (always remove when removing files)
+    if args.remove_files:
+        print()
+        logger.log_section("Removing Rust Toolchain")
+        remove_rustup(args.dry_run)
 
     # Final summary
     print()

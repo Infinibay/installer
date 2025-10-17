@@ -34,14 +34,14 @@ UBUNTU_PACKAGES = [
     'virtinst',
     'virt-manager',
     'cpu-checker',
-    'rustc',
-    'cargo',
     'build-essential',
     'pkg-config',
     'libvirt-dev',
     'libssl-dev',
     'btrfs-progs',
     'p7zip-full',
+    'mingw-w64',  # Windows cross-compilation toolchain for infiniservice.exe
+    'curl',  # Required for rustup installation
 ]
 
 FEDORA_PACKAGES = [
@@ -56,8 +56,6 @@ FEDORA_PACKAGES = [
     'bridge-utils',
     'virt-install',
     'virt-manager',
-    'rust',
-    'cargo',
     'gcc',
     'gcc-c++',
     'make',
@@ -66,9 +64,12 @@ FEDORA_PACKAGES = [
     'openssl-devel',
     'btrfs-progs',
     'p7zip',
+    'mingw64-gcc',  # Windows cross-compilation toolchain for infiniservice.exe
+    'curl',  # Required for rustup installation
 ]
 
 # Commands that must be available after installation
+# Note: rustc and cargo are installed via rustup, not system packages
 REQUIRED_COMMANDS = [
     'node',
     'npm',
@@ -76,8 +77,6 @@ REQUIRED_COMMANDS = [
     'redis-cli',  # Redis client for cache verification
     'virsh',
     'qemu-system-x86_64',
-    'rustc',
-    'cargo',
 ]
 
 
@@ -283,6 +282,178 @@ def enable_and_start_services(context: InstallerContext):
     log_success("All services enabled and started")
 
 
+def verify_mingw_installation(context: InstallerContext):
+    """
+    Verify mingw-w64 cross-compilation toolchain is installed.
+
+    Required for building Windows binaries from Linux.
+    """
+    log_info("Verifying mingw-w64 installation...")
+
+    mingw_gcc = 'x86_64-w64-mingw32-gcc'
+
+    if command_exists(mingw_gcc):
+        version = get_command_version(mingw_gcc)
+        log_success(f"mingw-w64 verified: {version}")
+    else:
+        log_error(f"{mingw_gcc} not found")
+        raise RuntimeError(
+            "mingw-w64 toolchain not installed.\n"
+            "This is required for building Windows binaries.\n"
+            "Install with:\n"
+            "  Ubuntu: sudo apt install mingw-w64\n"
+            "  Fedora: sudo dnf install mingw64-gcc"
+        )
+
+
+def install_rustup(context: InstallerContext):
+    """
+    Install rustup (Rust toolchain manager) and Rust stable toolchain.
+
+    Rustup is required for:
+    - Installing Rust compiler and cargo
+    - Adding cross-compilation targets (x86_64-pc-windows-gnu)
+    - Managing Rust toolchain versions
+
+    This is installed via the official rustup.sh script instead of system packages
+    to ensure we have rustup available for target management.
+    """
+    log_info("Installing Rust toolchain via rustup...")
+
+    # Check if rustup is already installed
+    if command_exists('rustup'):
+        log_info("rustup already installed, updating...")
+        if not context.dry_run:
+            try:
+                # Update rustup itself
+                run_command("rustup self update", timeout=300)
+                log_success("rustup updated")
+
+                # Update stable toolchain
+                run_command("rustup update stable", timeout=300)
+                log_success("Rust stable toolchain updated")
+
+                # Ensure stable is default
+                run_command("rustup default stable", timeout=60)
+                log_success("Rust stable set as default")
+
+                # Verify versions
+                for cmd in ['rustc', 'cargo']:
+                    if command_exists(cmd):
+                        version = get_command_version(cmd)
+                        log_debug(f"✓ {cmd}: {version}")
+
+            except subprocess.CalledProcessError as e:
+                log_warning(f"Failed to update Rust: {e}")
+        return
+
+    # Check if cargo/rustc exist (system packages)
+    if command_exists('cargo') or command_exists('rustc'):
+        log_warning("Found system-installed Rust/Cargo packages")
+        log_warning("Removing system Rust packages to install via rustup...")
+        pkg_manager = get_package_manager(context.os_info.os_type)
+        if not context.dry_run:
+            try:
+                if pkg_manager == "apt":
+                    run_command("apt remove -y rustc cargo", check=False, timeout=60)
+                elif pkg_manager == "dnf":
+                    run_command("dnf remove -y rust cargo", check=False, timeout=60)
+            except Exception as e:
+                log_debug(f"Error removing system Rust: {e}")
+
+    if context.dry_run:
+        log_info("[DRY RUN] Would install rustup via https://sh.rustup.rs")
+        log_info("[DRY RUN] Would install Rust stable toolchain")
+        log_info("[DRY RUN] Would set stable as default toolchain")
+        return
+
+    # Get the user who invoked sudo (for proper home directory)
+    sudo_user = os.environ.get('SUDO_USER')
+    install_user = sudo_user if sudo_user else os.environ.get('USER', 'root')
+
+    try:
+        # Download and run rustup installer
+        log_info("Downloading rustup installer...")
+        rustup_cmd = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
+
+        # Run as the actual user, not root
+        if sudo_user:
+            # Run as the sudo user to install in their home directory
+            env = os.environ.copy()
+            env['USER'] = sudo_user
+            env['HOME'] = f"/home/{sudo_user}" if sudo_user != 'root' else '/root'
+
+            run_command(
+                f"su - {sudo_user} -c '{rustup_cmd}'",
+                timeout=600,
+                env=env
+            )
+        else:
+            # Run as current user (already root or in script)
+            run_command(rustup_cmd, timeout=600, shell=True)
+
+        log_success("Rustup installed successfully")
+
+        # Add cargo to PATH for current session
+        cargo_bin = f"/home/{sudo_user}/.cargo/bin" if sudo_user and sudo_user != 'root' else "/root/.cargo/bin"
+        os.environ['PATH'] = f"{cargo_bin}:{os.environ.get('PATH', '')}"
+
+        # Verify rustup is available
+        if not command_exists('rustup'):
+            raise RuntimeError("rustup not found in PATH after installation")
+
+        # Install stable toolchain explicitly
+        log_info("Installing Rust stable toolchain...")
+        try:
+            if sudo_user:
+                run_command(
+                    f"su - {sudo_user} -c 'rustup toolchain install stable'",
+                    timeout=600
+                )
+            else:
+                run_command("rustup toolchain install stable", timeout=600)
+            log_success("Rust stable toolchain installed")
+        except subprocess.CalledProcessError as e:
+            log_error(f"Failed to install Rust stable toolchain: {e}")
+            raise RuntimeError("Failed to install Rust stable toolchain")
+
+        # Set stable as default toolchain
+        log_info("Setting stable as default Rust toolchain...")
+        try:
+            if sudo_user:
+                run_command(
+                    f"su - {sudo_user} -c 'rustup default stable'",
+                    timeout=60
+                )
+            else:
+                run_command("rustup default stable", timeout=60)
+            log_success("Rust stable set as default toolchain")
+        except subprocess.CalledProcessError as e:
+            log_error(f"Failed to set default toolchain: {e}")
+            raise RuntimeError("Failed to set default Rust toolchain")
+
+        # Verify installation
+        log_info("Verifying Rust installation...")
+        for cmd in ['rustup', 'rustc', 'cargo']:
+            if command_exists(cmd):
+                version = get_command_version(cmd)
+                log_success(f"✓ {cmd}: {version}")
+            else:
+                raise RuntimeError(f"{cmd} not found after rustup installation")
+
+        log_success("Rust toolchain verified and configured")
+
+    except subprocess.CalledProcessError as e:
+        log_error(f"Failed to install rustup: {e}")
+        raise RuntimeError(
+            "Rustup installation failed.\n"
+            "Please install manually:\n"
+            "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Rustup installation timed out. Please check your internet connection.")
+
+
 def check_kvm_support(context: InstallerContext):
     """Check if KVM virtualization is available."""
     log_info("Checking KVM virtualization support...")
@@ -389,6 +560,20 @@ def run_system_checks(context: InstallerContext):
 
         # Enable and start services
         enable_and_start_services(context)
+
+        # Install Rust toolchain via rustup
+        try:
+            install_rustup(context)
+        except RuntimeError as e:
+            log_error(f"Rust installation failed: {e}")
+            raise
+
+        # Verify mingw-w64 installation (for Windows builds)
+        try:
+            verify_mingw_installation(context)
+        except RuntimeError as e:
+            log_error(f"mingw-w64 verification failed: {e}")
+            raise
 
         # Setup libvirt network (non-critical)
         try:

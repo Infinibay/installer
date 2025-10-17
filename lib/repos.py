@@ -222,11 +222,57 @@ def build_libvirt_node(context: InstallerContext):
     if not os.path.exists(context.libvirt_node_dir):
         raise RuntimeError(f"libvirt-node directory not found: {context.libvirt_node_dir}")
 
+    # Ensure Rust toolchain is available in PATH
+    # This is critical because libvirt-node uses napi-rs which requires cargo
+    sudo_user = os.environ.get('SUDO_USER')
+    cargo_bin = f"/home/{sudo_user}/.cargo/bin" if sudo_user and sudo_user != 'root' else "/root/.cargo/bin"
+    rustup_home = f"/home/{sudo_user}/.rustup" if sudo_user and sudo_user != 'root' else "/root/.rustup"
+    cargo_home = f"/home/{sudo_user}/.cargo" if sudo_user and sudo_user != 'root' else "/root/.cargo"
+
+    # Prepare environment with Rust toolchain in PATH
+    # We need to create a fresh environment with the user's Rust installation
+    build_env = os.environ.copy()
+
+    # Add cargo bin to PATH
+    current_path = build_env.get('PATH', '')
+    if cargo_bin not in current_path:
+        log_debug(f"Adding {cargo_bin} to PATH for libvirt-node build")
+        build_env['PATH'] = f"{cargo_bin}:{current_path}"
+
+    # Set Rust environment variables
+    build_env['CARGO_HOME'] = cargo_home
+    build_env['RUSTUP_HOME'] = rustup_home
+
+    # Verify cargo is available in the build environment
+    # We check by trying to run cargo --version with the new environment
+    try:
+        result = run_command(
+            "cargo --version",
+            env=build_env,
+            timeout=10,
+            check=False
+        )
+        if not result.success:
+            raise RuntimeError(
+                f"cargo not accessible with PATH={cargo_bin}\n"
+                f"CARGO_HOME={cargo_home}\n"
+                f"RUSTUP_HOME={rustup_home}\n"
+                "Rust toolchain must be installed before building libvirt-node.\n"
+                "Please ensure rustup was installed successfully in Phase 2."
+            )
+        log_debug(f"Verified cargo available: {result.stdout.strip()}")
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to verify cargo availability: {e}\n"
+            "libvirt-node uses napi-rs which requires cargo for compilation.\n"
+            "Please ensure rustup was installed successfully in Phase 2."
+        )
+
     try:
         # Step 1: npm install
         log_info("Step 1/3: Installing libvirt-node dependencies...")
         try:
-            run_command("npm install", cwd=context.libvirt_node_dir, timeout=600)
+            run_command("npm install", cwd=context.libvirt_node_dir, timeout=600, env=build_env)
         except subprocess.CalledProcessError as e:
             log_error("npm install failed for libvirt-node")
             log_error("Possible issues:")
@@ -239,14 +285,16 @@ def build_libvirt_node(context: InstallerContext):
 
         # Step 2: npm run build (runs napi build --release)
         log_info("Step 2/3: Building Rust native addon...")
+        log_debug(f"Using cargo from: {cargo_bin}")
         try:
-            run_command("npm run build", cwd=context.libvirt_node_dir, timeout=900)
+            run_command("npm run build", cwd=context.libvirt_node_dir, timeout=900, env=build_env)
         except subprocess.CalledProcessError as e:
             log_error("Rust build failed for libvirt-node")
             log_error("Possible issues:")
             log_error("  - Check if rust/cargo are installed: rustc --version")
             log_error("  - Check if libvirt-dev is installed: pkg-config --exists libvirt")
             log_error("  - Check build dependencies are installed")
+            log_error(f"  - Cargo binary path: {cargo_bin}")
             if e.stderr:
                 log_error(f"Error output: {e.stderr}")
             raise RuntimeError("Failed to build libvirt-node native addon")
@@ -550,14 +598,17 @@ def build_frontend(context: InstallerContext):
 
 def build_infiniservice(context: InstallerContext):
     """
-    Build infiniservice Rust binary.
+    Build infiniservice Rust binary for Linux and Windows.
 
     Commands:
         cd infiniservice
-        cargo build --release
+        rustup target add x86_64-pc-windows-gnu  # Add Windows target
+        cargo build --release                     # Linux binary
+        cargo build --release --target x86_64-pc-windows-gnu  # Windows binary
 
     Verifies:
-        - target/release/infiniservice exists
+        - target/release/infiniservice exists (Linux)
+        - target/x86_64-pc-windows-gnu/release/infiniservice.exe exists (Windows)
 
     Args:
         context: Installation configuration context
@@ -565,55 +616,175 @@ def build_infiniservice(context: InstallerContext):
     Raises:
         RuntimeError: If build fails
     """
-    log_info("Building infiniservice Rust binary...")
+    log_info("Building infiniservice Rust binaries (Linux and Windows)...")
 
     # Dry-run mode
     if context.dry_run:
         log_info(f"[DRY RUN] Would run in {context.infiniservice_dir}:")
+        log_info("[DRY RUN]   rustup target add x86_64-pc-windows-gnu")
         log_info("[DRY RUN]   cargo build --release")
+        log_info("[DRY RUN]   cargo build --release --target x86_64-pc-windows-gnu")
         return
 
     # Check if directory exists
     if not os.path.exists(context.infiniservice_dir):
         raise RuntimeError(f"Infiniservice directory not found: {context.infiniservice_dir}")
 
+    # Ensure Rust toolchain is available in PATH
+    sudo_user = os.environ.get('SUDO_USER')
+    cargo_bin = f"/home/{sudo_user}/.cargo/bin" if sudo_user and sudo_user != 'root' else "/root/.cargo/bin"
+    rustup_home = f"/home/{sudo_user}/.rustup" if sudo_user and sudo_user != 'root' else "/root/.rustup"
+    cargo_home = f"/home/{sudo_user}/.cargo" if sudo_user and sudo_user != 'root' else "/root/.cargo"
+
+    # Prepare environment with Rust toolchain
+    build_env = os.environ.copy()
+
+    # Add cargo bin to PATH
+    current_path = build_env.get('PATH', '')
+    if cargo_bin not in current_path:
+        log_debug(f"Adding {cargo_bin} to PATH for infiniservice build")
+        build_env['PATH'] = f"{cargo_bin}:{current_path}"
+
+    # Set Rust environment variables
+    build_env['CARGO_HOME'] = cargo_home
+    build_env['RUSTUP_HOME'] = rustup_home
+
+    # Verify rustup and cargo are available in the build environment
+    try:
+        result = run_command("rustup --version", env=build_env, timeout=10, check=False)
+        if not result.success:
+            raise RuntimeError(
+                f"rustup not accessible with PATH={cargo_bin}\n"
+                f"CARGO_HOME={cargo_home}\n"
+                f"RUSTUP_HOME={rustup_home}\n"
+                "Please run the installer from the beginning or install Rust manually:\n"
+                "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            )
+        log_debug(f"Verified rustup: {result.stdout.strip()}")
+
+        result = run_command("cargo --version", env=build_env, timeout=10, check=False)
+        if not result.success:
+            raise RuntimeError("cargo not accessible in build environment")
+        log_debug(f"Verified cargo: {result.stdout.strip()}")
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to verify Rust toolchain: {e}")
+
+    # Verify mingw-w64 is installed for Windows cross-compilation
+    mingw_gcc = 'x86_64-w64-mingw32-gcc'
+    from .utils import command_exists
+    if not command_exists(mingw_gcc):
+        log_warning(f"{mingw_gcc} not found - Windows build may fail")
+        log_warning("Install mingw-w64 package for Windows cross-compilation")
+
     # Remember original ownership
     original_owner = get_directory_owner(context.infiniservice_dir)
 
     try:
-        # cargo build --release
-        log_info("Compiling Rust binary (this may take several minutes)...")
+        # Step 1: Add Windows cross-compilation target
+        log_info("Step 1/3: Installing Windows cross-compilation target...")
         try:
-            run_command("cargo build --release", cwd=context.infiniservice_dir, timeout=1800)
+            run_command(
+                "rustup target add x86_64-pc-windows-gnu",
+                cwd=context.infiniservice_dir,
+                timeout=300,
+                env=build_env
+            )
+            log_success("Windows target installed")
         except subprocess.CalledProcessError as e:
-            log_error("Cargo build failed for infiniservice")
+            log_warning("Failed to add Windows target (may already be installed)")
+            log_debug(f"Error: {e}")
+
+        # Step 2: Build Linux binary
+        log_info("Step 2/3: Compiling Linux binary (this may take several minutes)...")
+        try:
+            run_command(
+                "cargo build --release",
+                cwd=context.infiniservice_dir,
+                timeout=1800,
+                env=build_env
+            )
+        except subprocess.CalledProcessError as e:
+            log_error("Cargo build failed for infiniservice (Linux)")
             log_error("Possible issues:")
             log_error("  - Check if rust/cargo are installed: rustc --version")
             log_error("  - Check if all system dependencies are available")
             log_error("  - Check network connection (for crate downloads)")
             if e.stderr:
                 log_error(f"Error output: {e.stderr}")
-            raise RuntimeError("Failed to build infiniservice")
+            raise RuntimeError("Failed to build infiniservice for Linux")
 
-        # Verify binary exists
-        binary_path = os.path.join(context.infiniservice_dir, "target", "release", "infiniservice")
-        verify_file_exists(binary_path, "Infiniservice binary")
+        # Verify Linux binary exists
+        linux_binary_path = os.path.join(context.infiniservice_dir, "target", "release", "infiniservice")
+        verify_file_exists(linux_binary_path, "Infiniservice Linux binary")
 
-        # Verify binary is executable
-        if not os.access(binary_path, os.X_OK):
+        # Make Linux binary executable
+        if not os.access(linux_binary_path, os.X_OK):
             log_warning("Binary is not executable, making it executable...")
             try:
-                run_command(f"chmod +x {binary_path}", check=False)
+                run_command(f"chmod +x {linux_binary_path}", check=False)
             except Exception as e:
                 log_warning(f"Failed to make binary executable: {e}")
 
-        log_success("Infiniservice compiled successfully")
-        log_debug(f"Binary location: {binary_path}")
+        log_success("Linux binary compiled successfully")
+        log_debug(f"Linux binary location: {linux_binary_path}")
+
+        # Step 3: Build Windows binary
+        log_info("Step 3/3: Compiling Windows binary (this may take several minutes)...")
+        try:
+            # Set RUSTFLAGS for static linking and smaller binary
+            # Start with build_env (has Rust paths) and add RUSTFLAGS
+            windows_env = build_env.copy()
+            windows_env['RUSTFLAGS'] = '-C target-feature=+crt-static -C link-arg=-s'
+
+            run_command(
+                "cargo build --release --target x86_64-pc-windows-gnu",
+                cwd=context.infiniservice_dir,
+                timeout=1800,
+                env=windows_env
+            )
+        except subprocess.CalledProcessError as e:
+            log_error("Cargo build failed for infiniservice (Windows)")
+            log_error("Possible issues:")
+            log_error("  - Check if mingw-w64 is installed: x86_64-w64-mingw32-gcc --version")
+            log_error("  - Check if Windows target is installed: rustup target list --installed")
+            log_error("  - Check network connection (for crate downloads)")
+            if e.stderr:
+                log_error(f"Error output: {e.stderr}")
+            raise RuntimeError("Failed to build infiniservice for Windows")
+
+        # Verify Windows binary exists
+        windows_binary_path = os.path.join(
+            context.infiniservice_dir,
+            "target",
+            "x86_64-pc-windows-gnu",
+            "release",
+            "infiniservice.exe"
+        )
+        verify_file_exists(windows_binary_path, "Infiniservice Windows binary")
+
+        # Strip Windows binary to reduce false positives in antivirus
+        log_info("Stripping Windows binary to reduce antivirus false positives...")
+        try:
+            run_command(
+                f"x86_64-w64-mingw32-strip {windows_binary_path}",
+                timeout=60,
+                check=False
+            )
+            log_success("Windows binary stripped successfully")
+        except Exception as e:
+            log_warning(f"Failed to strip Windows binary: {e}")
+            log_warning("Binary may trigger antivirus false positives")
+
+        log_success("Windows binary compiled successfully")
+        log_debug(f"Windows binary location: {windows_binary_path}")
 
         # Restore original ownership if we're using an existing directory
         if original_owner:
             log_info("Restoring original file ownership...")
             restore_ownership(context.infiniservice_dir, original_owner)
+
+        log_success("All infiniservice binaries compiled successfully")
 
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out after 30 minutes: {e}")
@@ -621,6 +792,140 @@ def build_infiniservice(context: InstallerContext):
     except Exception as e:
         log_error(f"Unexpected error during infiniservice build: {e}")
         raise
+
+
+def deploy_infiniservice(context: InstallerContext):
+    """
+    Deploy infiniservice binaries and install scripts to backend access location.
+
+    Deployment structure:
+        {data_dir}/infiniservice/
+        ├── binaries/
+        │   ├── linux/
+        │   │   ├── infiniservice
+        │   │   └── install-linux.sh
+        │   └── windows/
+        │       ├── infiniservice.exe
+        │       └── install-windows.ps1
+        └── install/
+            ├── install-linux.sh
+            └── install-windows.ps1
+
+    Args:
+        context: Installation configuration context
+
+    Raises:
+        RuntimeError: If deployment fails
+    """
+    log_info("Deploying infiniservice binaries and install scripts...")
+
+    # Dry-run mode
+    if context.dry_run:
+        log_info(f"[DRY RUN] Would deploy to {context.data_dir}/infiniservice/")
+        log_info("[DRY RUN]   - Linux binary: binaries/linux/infiniservice")
+        log_info("[DRY RUN]   - Windows binary: binaries/windows/infiniservice.exe")
+        log_info("[DRY RUN]   - Install scripts: install/*.sh, install/*.ps1")
+        return
+
+    # Define deployment paths
+    deploy_base = os.path.join(context.data_dir, "infiniservice")
+    binaries_dir = os.path.join(deploy_base, "binaries")
+    linux_binaries_dir = os.path.join(binaries_dir, "linux")
+    windows_binaries_dir = os.path.join(binaries_dir, "windows")
+    install_scripts_dir = os.path.join(deploy_base, "install")
+
+    try:
+        # Create deployment directories
+        log_debug("Creating deployment directories...")
+        os.makedirs(linux_binaries_dir, exist_ok=True)
+        os.makedirs(windows_binaries_dir, exist_ok=True)
+        os.makedirs(install_scripts_dir, exist_ok=True)
+
+        # Source paths
+        linux_binary_src = os.path.join(context.infiniservice_dir, "target", "release", "infiniservice")
+        windows_binary_src = os.path.join(
+            context.infiniservice_dir,
+            "target",
+            "x86_64-pc-windows-gnu",
+            "release",
+            "infiniservice.exe"
+        )
+        install_dir_src = os.path.join(context.infiniservice_dir, "install")
+
+        # Deploy Linux binary
+        log_info("Deploying Linux binary...")
+        if not os.path.exists(linux_binary_src):
+            raise RuntimeError(f"Linux binary not found at {linux_binary_src}. Build may have failed.")
+
+        linux_binary_dest = os.path.join(linux_binaries_dir, "infiniservice")
+        shutil.copy2(linux_binary_src, linux_binary_dest)
+        os.chmod(linux_binary_dest, 0o755)
+        log_success(f"Linux binary deployed: {linux_binary_dest}")
+
+        # Deploy Windows binary
+        log_info("Deploying Windows binary...")
+        if not os.path.exists(windows_binary_src):
+            log_warning(f"Windows binary not found at {windows_binary_src}")
+            log_warning("Windows binary deployment skipped")
+        else:
+            windows_binary_dest = os.path.join(windows_binaries_dir, "infiniservice.exe")
+            shutil.copy2(windows_binary_src, windows_binary_dest)
+            # Windows executables don't need chmod
+            log_success(f"Windows binary deployed: {windows_binary_dest}")
+
+        # Deploy install scripts
+        log_info("Deploying install scripts...")
+
+        # Linux install script (to both locations)
+        linux_install_src = os.path.join(install_dir_src, "install-linux.sh")
+        if os.path.exists(linux_install_src):
+            # Copy to binaries/linux/ directory
+            linux_install_dest_binaries = os.path.join(linux_binaries_dir, "install-linux.sh")
+            shutil.copy2(linux_install_src, linux_install_dest_binaries)
+            os.chmod(linux_install_dest_binaries, 0o755)
+
+            # Copy to install/ directory
+            linux_install_dest_main = os.path.join(install_scripts_dir, "install-linux.sh")
+            shutil.copy2(linux_install_src, linux_install_dest_main)
+            os.chmod(linux_install_dest_main, 0o755)
+
+            log_success("Linux install script deployed")
+        else:
+            log_warning(f"Linux install script not found: {linux_install_src}")
+
+        # Windows install script (to both locations)
+        windows_install_src = os.path.join(install_dir_src, "install-windows.ps1")
+        if os.path.exists(windows_install_src):
+            # Copy to binaries/windows/ directory
+            windows_install_dest_binaries = os.path.join(windows_binaries_dir, "install-windows.ps1")
+            shutil.copy2(windows_install_src, windows_install_dest_binaries)
+
+            # Copy to install/ directory
+            windows_install_dest_main = os.path.join(install_scripts_dir, "install-windows.ps1")
+            shutil.copy2(windows_install_src, windows_install_dest_main)
+
+            log_success("Windows install script deployed")
+        else:
+            log_warning(f"Windows install script not found: {windows_install_src}")
+
+        # Set proper permissions on deployment directories
+        os.chmod(deploy_base, 0o755)
+        os.chmod(binaries_dir, 0o755)
+        os.chmod(linux_binaries_dir, 0o755)
+        os.chmod(windows_binaries_dir, 0o755)
+        os.chmod(install_scripts_dir, 0o755)
+
+        log_success("Infiniservice deployment completed")
+        log_info(f"Deployment location: {deploy_base}")
+        log_info("Backend can now serve binaries to VMs via /infiniservice routes")
+
+    except PermissionError as e:
+        log_error(f"Permission denied during deployment: {e}")
+        log_error("Please ensure the installer is run with proper permissions")
+        raise RuntimeError("Infiniservice deployment failed due to permissions")
+    except Exception as e:
+        log_error(f"Unexpected error during infiniservice deployment: {e}")
+        raise RuntimeError(f"Infiniservice deployment failed: {e}")
 
 
 def clone_and_build(context: InstallerContext):
@@ -793,6 +1098,21 @@ def clone_and_build(context: InstallerContext):
         raise
 
     # =================================================================
+    # Phase 4e-1: Deploy Infiniservice
+    # =================================================================
+    try:
+        log_section("Phase 4e-1: Deploying Infiniservice")
+
+        deploy_infiniservice(context)
+
+    except RuntimeError as e:
+        log_error(f"Infiniservice deployment failed: {e}")
+        raise
+    except Exception as e:
+        log_error(f"Unexpected error during infiniservice deployment: {e}")
+        raise
+
+    # =================================================================
     # Phase 4f: Setup VirtIO Windows Drivers
     # =================================================================
     try:
@@ -848,10 +1168,33 @@ def clone_and_build(context: InstallerContext):
         if os.path.exists(frontend_node_modules):
             log_success("Frontend: ✓ node_modules")
 
-        # Verify infiniservice
-        infiniservice_binary = os.path.join(context.infiniservice_dir, "target", "release", "infiniservice")
-        if os.path.exists(infiniservice_binary):
-            log_success("Infiniservice: ✓ target/release/infiniservice")
+        # Verify infiniservice build
+        infiniservice_linux_binary = os.path.join(context.infiniservice_dir, "target", "release", "infiniservice")
+        if os.path.exists(infiniservice_linux_binary):
+            log_success("Infiniservice: ✓ target/release/infiniservice (Linux)")
+
+        infiniservice_windows_binary = os.path.join(
+            context.infiniservice_dir,
+            "target",
+            "x86_64-pc-windows-gnu",
+            "release",
+            "infiniservice.exe"
+        )
+        if os.path.exists(infiniservice_windows_binary):
+            log_success("Infiniservice: ✓ target/x86_64-pc-windows-gnu/release/infiniservice.exe (Windows)")
+
+        # Verify infiniservice deployment
+        deployed_linux_binary = os.path.join(context.data_dir, "infiniservice", "binaries", "linux", "infiniservice")
+        if os.path.exists(deployed_linux_binary):
+            log_success("Infiniservice: ✓ binaries/linux/infiniservice (deployed)")
+
+        deployed_windows_binary = os.path.join(context.data_dir, "infiniservice", "binaries", "windows", "infiniservice.exe")
+        if os.path.exists(deployed_windows_binary):
+            log_success("Infiniservice: ✓ binaries/windows/infiniservice.exe (deployed)")
+
+        deployed_install_script = os.path.join(context.data_dir, "infiniservice", "install", "install-linux.sh")
+        if os.path.exists(deployed_install_script):
+            log_success("Infiniservice: ✓ install/install-linux.sh (deployed)")
 
     except Exception as e:
         log_warning(f"Verification check failed (builds may still be OK): {e}")
