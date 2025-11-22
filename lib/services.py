@@ -299,6 +299,20 @@ def setup_data_directories(context: InstallerContext, owner_uid: int = None, own
     os.chmod(context.data_dir, 0o775)
     log_debug(f"Created and configured: {context.data_dir}")
 
+    # Create scripts directory structure
+    scripts_dir = os.path.join(context.data_dir, 'scripts')
+    scripts_library_dir = os.path.join(scripts_dir, 'library')
+    scripts_templates_dir = os.path.join(scripts_dir, 'templates')
+    scripts_metadata_dir = os.path.join(scripts_dir, '.metadata')
+
+    for scripts_subdir in [scripts_dir, scripts_library_dir, scripts_templates_dir, scripts_metadata_dir]:
+        os.makedirs(scripts_subdir, exist_ok=True)
+        os.chown(scripts_subdir, owner_uid, owner_gid)
+        os.chmod(scripts_subdir, 0o755)
+        log_debug(f"Created and configured: {scripts_subdir}")
+
+    log_success(f"Scripts directory configured: {scripts_dir}")
+
     log_success(f"Data directory configured: {context.data_dir}")
     log_info(f"Owner: {owner_uid}:{owner_gid}")
 

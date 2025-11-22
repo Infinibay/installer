@@ -226,11 +226,12 @@ The installer executes the following phases:
 - Install required packages:
   - Node.js and npm
   - PostgreSQL
+  - Redis (`redis-server` on Ubuntu, `redis` on Fedora) - cache for firewall performance optimization
   - QEMU/KVM and libvirt
   - Rust and Cargo
   - Build tools and development libraries
   - bridge-utils
-- Enable and start system services
+- Enable and start system services (postgresql, libvirtd, redis)
 - Configure libvirt virtual network automatically
 - Verify KVM support
 
