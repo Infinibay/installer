@@ -91,8 +91,13 @@ class InstallerContext:
 
     @property
     def libvirt_node_dir(self) -> str:
-        """Libvirt-node native addon directory."""
+        """Libvirt-node native addon directory (deprecated)."""
         return f"{self.install_dir}/libvirt-node"
+
+    @property
+    def infinization_dir(self) -> str:
+        """Infinization virtualization library directory."""
+        return f"{self.install_dir}/infinization"
 
     @property
     def iso_dir(self) -> str:

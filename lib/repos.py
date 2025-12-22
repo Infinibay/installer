@@ -23,13 +23,13 @@ REPO_URLS = {
     'backend': 'https://github.com/infinibay/backend.git',
     'frontend': 'https://github.com/infinibay/frontend.git',
     'infiniservice': 'https://github.com/infinibay/infiniservice.git',
-    'libvirt-node': 'https://github.com/Infinibay/libvirt-node.git',
+    'infinization': 'https://github.com/infinibay/infinization.git',
 }
 
-# Build order (must build libvirt-node first as backend depends on it)
+# Build order (infinization after backend - npm install in backend creates symlink automatically)
 BUILD_ORDER = [
-    'libvirt-node',
     'backend',
+    'infinization',
     'frontend',
     'infiniservice',
 ]
@@ -188,19 +188,20 @@ def clone_repository(url: str, destination: str, context: InstallerContext):
                 raise RuntimeError("Clone operation timed out")
 
 
-def build_libvirt_node(context: InstallerContext):
+def build_infinization(context: InstallerContext):
     """
-    Build libvirt-node native addon.
+    Build infinization TypeScript library.
 
     Commands:
-        cd backend/lib/libvirt-node
+        cd infinization
         npm install
         npm run build
-        npm pack
+        sudo systemd/install-service.sh
 
     Verifies:
-        - *.node file exists (compiled Rust addon)
-        - infinibay-libvirt-node-0.0.1.tgz exists
+        - node_modules exists
+        - dist/ directory exists with compiled TypeScript
+        - nftables systemd service installed
 
     Args:
         context: Installation configuration context
@@ -208,125 +209,99 @@ def build_libvirt_node(context: InstallerContext):
     Raises:
         RuntimeError: If build fails
     """
-    log_info("Building libvirt-node native addon...")
+    log_info("Building infinization virtualization library...")
 
     # Dry-run mode
     if context.dry_run:
-        log_info(f"[DRY RUN] Would run in {context.libvirt_node_dir}:")
+        log_info(f"[DRY RUN] Would run in {context.infinization_dir}:")
         log_info("[DRY RUN]   npm install")
         log_info("[DRY RUN]   npm run build")
-        log_info("[DRY RUN]   npm pack")
+        log_info("[DRY RUN]   sudo systemd/install-service.sh")
         return
 
     # Check if directory exists
-    if not os.path.exists(context.libvirt_node_dir):
-        raise RuntimeError(f"libvirt-node directory not found: {context.libvirt_node_dir}")
+    if not os.path.exists(context.infinization_dir):
+        raise RuntimeError(f"infinization directory not found: {context.infinization_dir}")
 
-    # Ensure Rust toolchain is available in PATH
-    # This is critical because libvirt-node uses napi-rs which requires cargo
-    sudo_user = os.environ.get('SUDO_USER')
-    cargo_bin = f"/home/{sudo_user}/.cargo/bin" if sudo_user and sudo_user != 'root' else "/root/.cargo/bin"
-    rustup_home = f"/home/{sudo_user}/.rustup" if sudo_user and sudo_user != 'root' else "/root/.rustup"
-    cargo_home = f"/home/{sudo_user}/.cargo" if sudo_user and sudo_user != 'root' else "/root/.cargo"
-
-    # Prepare environment with Rust toolchain in PATH
-    # We need to create a fresh environment with the user's Rust installation
-    build_env = os.environ.copy()
-
-    # Add cargo bin to PATH
-    current_path = build_env.get('PATH', '')
-    if cargo_bin not in current_path:
-        log_debug(f"Adding {cargo_bin} to PATH for libvirt-node build")
-        build_env['PATH'] = f"{cargo_bin}:{current_path}"
-
-    # Set Rust environment variables
-    build_env['CARGO_HOME'] = cargo_home
-    build_env['RUSTUP_HOME'] = rustup_home
-
-    # Verify cargo is available in the build environment
-    # We check by trying to run cargo --version with the new environment
-    try:
-        result = run_command(
-            "cargo --version",
-            env=build_env,
-            timeout=10,
-            check=False
-        )
-        if not result.success:
-            raise RuntimeError(
-                f"cargo not accessible with PATH={cargo_bin}\n"
-                f"CARGO_HOME={cargo_home}\n"
-                f"RUSTUP_HOME={rustup_home}\n"
-                "Rust toolchain must be installed before building libvirt-node.\n"
-                "Please ensure rustup was installed successfully in Phase 2."
-            )
-        log_debug(f"Verified cargo available: {result.stdout.strip()}")
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to verify cargo availability: {e}\n"
-            "libvirt-node uses napi-rs which requires cargo for compilation.\n"
-            "Please ensure rustup was installed successfully in Phase 2."
-        )
+    # Remember original ownership
+    original_owner = get_directory_owner(context.infinization_dir)
 
     try:
         # Step 1: npm install
-        log_info("Step 1/3: Installing libvirt-node dependencies...")
+        log_info("Step 1/3: Installing infinization dependencies...")
         try:
-            run_command("npm install", cwd=context.libvirt_node_dir, timeout=600, env=build_env)
+            run_command("npm install", cwd=context.infinization_dir, timeout=600)
         except subprocess.CalledProcessError as e:
-            log_error("npm install failed for libvirt-node")
+            log_error("npm install failed for infinization")
             log_error("Possible issues:")
-            log_error("  - Node.js version must be >= 16")
+            log_error("  - Node.js version must be >= 18.18.0")
             log_error("  - Check npm cache: npm cache clean --force")
             log_error("  - Check network connection")
             if e.stderr:
                 log_error(f"Error output: {e.stderr}")
-            raise RuntimeError("Failed to install libvirt-node dependencies")
+            raise RuntimeError("Failed to install infinization dependencies")
 
-        # Step 2: npm run build (runs napi build --release)
-        log_info("Step 2/3: Building Rust native addon...")
-        log_debug(f"Using cargo from: {cargo_bin}")
+        # Verify node_modules exists
+        node_modules_path = os.path.join(context.infinization_dir, "node_modules")
+        verify_directory_exists(node_modules_path, "infinization node_modules")
+
+        # Step 2: npm run build (TypeScript compilation)
+        log_info("Step 2/3: Compiling TypeScript...")
         try:
-            run_command("npm run build", cwd=context.libvirt_node_dir, timeout=900, env=build_env)
+            run_command("npm run build", cwd=context.infinization_dir, timeout=300)
         except subprocess.CalledProcessError as e:
-            log_error("Rust build failed for libvirt-node")
+            log_error("TypeScript build failed for infinization")
             log_error("Possible issues:")
-            log_error("  - Check if rust/cargo are installed: rustc --version")
-            log_error("  - Check if libvirt-dev is installed: pkg-config --exists libvirt")
-            log_error("  - Check build dependencies are installed")
-            log_error(f"  - Cargo binary path: {cargo_bin}")
+            log_error("  - Check for TypeScript errors")
+            log_error("  - Verify tsconfig.json is valid")
             if e.stderr:
                 log_error(f"Error output: {e.stderr}")
-            raise RuntimeError("Failed to build libvirt-node native addon")
+            raise RuntimeError("Failed to build infinization TypeScript")
 
-        # Verify .node file exists
-        node_files = glob.glob(os.path.join(context.libvirt_node_dir, "*.node"))
-        if not node_files:
-            raise RuntimeError("No .node file found after build")
-        log_debug(f"Found compiled addon: {node_files[0]}")
+        # Verify dist/ directory exists
+        dist_path = os.path.join(context.infinization_dir, "dist")
+        verify_directory_exists(dist_path, "infinization dist")
 
-        # Step 3: npm pack (creates .tgz package)
-        log_info("Step 3/3: Packaging libvirt-node...")
-        try:
-            run_command("npm pack", cwd=context.libvirt_node_dir, timeout=300)
-        except subprocess.CalledProcessError as e:
-            log_error("npm pack failed for libvirt-node")
-            if e.stderr:
-                log_error(f"Error output: {e.stderr}")
-            raise RuntimeError("Failed to package libvirt-node")
+        # Verify main entry point exists
+        main_file = os.path.join(dist_path, "index.js")
+        verify_file_exists(main_file, "infinization main entry point")
 
-        # Verify .tgz file exists
-        tgz_path = os.path.join(context.libvirt_node_dir, "infinibay-libvirt-node-0.0.1.tgz")
-        verify_file_exists(tgz_path, "libvirt-node package")
+        # Step 3: Install nftables systemd service
+        log_info("Step 3/3: Installing nftables systemd service...")
+        install_script = os.path.join(context.infinization_dir, "systemd", "install-service.sh")
 
-        log_success("libvirt-node built and packaged successfully")
-        log_debug(f"Created package: {tgz_path}")
+        if not os.path.exists(install_script):
+            log_warning(f"Install script not found: {install_script}")
+            log_warning("Skipping nftables service installation")
+        else:
+            try:
+                # Make script executable
+                os.chmod(install_script, 0o755)
+
+                # Run install script with sudo
+                run_command(f"sudo {install_script}", cwd=context.infinization_dir, timeout=60)
+
+                log_success("nftables systemd service installed successfully")
+            except subprocess.CalledProcessError as e:
+                log_error("Failed to install nftables service")
+                log_error("This is not critical - infinization will still work")
+                log_error("Firewall rules will need to be managed manually")
+                if e.stderr:
+                    log_error(f"Error output: {e.stderr}")
+                # Don't raise - this is not critical
+
+        log_success("infinization built successfully")
+
+        # Restore original ownership if we're using an existing directory
+        if original_owner:
+            log_info("Restoring original file ownership...")
+            restore_ownership(context.infinization_dir, original_owner)
 
     except subprocess.TimeoutExpired as e:
         log_error(f"Build timed out: {e}")
-        raise RuntimeError("libvirt-node build timed out")
+        raise RuntimeError("infinization build timed out")
     except Exception as e:
-        log_error(f"Unexpected error during libvirt-node build: {e}")
+        log_error(f"Unexpected error during infinization build: {e}")
         raise
 
 
@@ -391,15 +366,13 @@ def build_backend(context: InstallerContext):
 
     Commands:
         cd backend
-        npm cache clean --force  # Important: clears cached .tgz integrity hashes
-        rm package-lock.json     # Regenerate with current libvirt-node .tgz hash
         npm install
         npx prisma generate
 
-    Note on libvirt-node integrity errors:
-        When libvirt-node is rebuilt, the .tgz file changes but package-lock.json
-        keeps the old integrity hash. This causes EINTEGRITY errors.
-        Solution: Clean cache and regenerate package-lock.json on each install.
+    Note on infinization:
+        Backend uses infinization via file:../infinization in package.json.
+        npm install automatically creates a symlink to the infinization directory.
+        infinization must be cloned before running npm install in backend.
 
     Note on ownership:
         When using existing code directory, preserves original file ownership.
@@ -432,36 +405,22 @@ def build_backend(context: InstallerContext):
     original_owner = get_directory_owner(context.backend_dir)
 
     try:
-        # Clean npm cache to avoid integrity checksum errors with local .tgz packages
-        log_info("Cleaning npm cache to ensure fresh installation...")
-        try:
-            run_command("npm cache clean --force", cwd=context.backend_dir, timeout=60)
-        except subprocess.CalledProcessError as e:
-            log_warning("Failed to clean npm cache, continuing anyway...")
-
-        # Remove package-lock.json to regenerate with correct integrity hashes
-        package_lock_path = os.path.join(context.backend_dir, "package-lock.json")
-        if os.path.exists(package_lock_path):
-            log_info("Removing package-lock.json to regenerate with current .tgz hash...")
-            os.remove(package_lock_path)
-
         # Step 1: npm install
         log_info("Step 1/2: Installing backend dependencies...")
-        log_info("This will install @infinibay/libvirt-node from the .tgz package...")
+        log_info("This will link @infinibay/infinization from ../infinization...")
         try:
             run_command("npm install", cwd=context.backend_dir, timeout=900)
         except subprocess.CalledProcessError as e:
             log_error("npm install failed for backend")
 
-            # Check if libvirt-node package exists
-            tgz_path = os.path.join(context.libvirt_node_dir, "infinibay-libvirt-node-0.0.1.tgz")
-            if not os.path.exists(tgz_path):
-                log_error(f"libvirt-node package not found: {tgz_path}")
-                log_error("Make sure libvirt-node was built successfully first")
+            # Check if infinization directory exists
+            if not os.path.exists(context.infinization_dir):
+                log_error(f"infinization directory not found: {context.infinization_dir}")
+                log_error("Make sure infinization was cloned successfully first")
 
             log_error("Possible issues:")
-            log_error("  - Check if libvirt-node was built successfully")
-            log_error("  - Check Node.js version (>= 16)")
+            log_error("  - Check if infinization directory exists")
+            log_error("  - Check Node.js version (>= 18.18.0)")
             log_error("  - Check npm cache: npm cache clean --force")
             log_error("  - Check network connection")
             if e.stderr:
@@ -935,14 +894,14 @@ def clone_and_build(context: InstallerContext):
     This phase will:
     1. Clone repos from GitHub to /opt/infinibay/:
        - backend (https://github.com/infinibay/backend.git)
+       - infinization (https://github.com/infinibay/infinization.git)
        - frontend (https://github.com/infinibay/frontend.git)
        - infiniservice (https://github.com/infinibay/infiniservice.git)
-       - libvirt-node is inside backend/lib/libvirt-node
 
     2. Build in correct order:
-       a. libvirt-node: cd backend/lib/libvirt-node && npm install && npm run build && npm pack
-       b. Backend: cd backend && npm install && npx prisma generate
-       c. Frontend: cd frontend && npm install
+       a. Backend: cd backend && npm install && npx prisma generate
+       b. Infinization: cd infinization && npm install && npm run build
+       c. Frontend: cd frontend && npm install && npm run build
        d. Infiniservice: cd infiniservice && cargo build --release
 
     3. Handle build errors with clear messages
@@ -965,12 +924,10 @@ def clone_and_build(context: InstallerContext):
         log_section("Phase 4a: Cloning Repositories")
 
         # Clone all repositories as top-level directories
-        # Note: libvirt-node is now a top-level repo, not nested in backend
-
         clone_repository(REPO_URLS['backend'], context.backend_dir, context)
+        clone_repository(REPO_URLS['infinization'], context.infinization_dir, context)
         clone_repository(REPO_URLS['frontend'], context.frontend_dir, context)
         clone_repository(REPO_URLS['infiniservice'], context.infiniservice_dir, context)
-        clone_repository(REPO_URLS['libvirt-node'], context.libvirt_node_dir, context)
 
         log_success("All repositories cloned successfully")
 
@@ -982,81 +939,10 @@ def clone_and_build(context: InstallerContext):
         raise
 
     # =================================================================
-    # Phase 4b: Build libvirt-node (CRITICAL - must be first)
+    # Phase 4b: Build Backend
     # =================================================================
     try:
-        log_section("Phase 4b: Building libvirt-node (Native Addon)")
-        log_warning("This is a critical step - backend depends on this package")
-
-        build_libvirt_node(context)
-
-        # Setup libvirt-node as git submodule in backend/lib/libvirt-node
-        # This allows backend's package.json to reference it at the expected path
-        backend_lib_dir = os.path.join(context.backend_dir, "lib")
-        backend_libvirt_submodule = os.path.join(backend_lib_dir, "libvirt-node")
-
-        if not context.dry_run:
-            # Ensure backend/lib directory exists
-            os.makedirs(backend_lib_dir, exist_ok=True)
-
-            # Remove existing symlink or directory if present (but not if it's already a proper submodule)
-            if os.path.exists(backend_libvirt_submodule) or os.path.islink(backend_libvirt_submodule):
-                # Check if it's a git submodule
-                is_submodule = os.path.exists(os.path.join(backend_libvirt_submodule, ".git"))
-
-                if os.path.islink(backend_libvirt_submodule):
-                    log_warning(f"Removing existing symlink: {backend_libvirt_submodule}")
-                    os.unlink(backend_libvirt_submodule)
-                elif is_submodule:
-                    log_info("libvirt-node submodule already exists, skipping")
-                elif os.path.isdir(backend_libvirt_submodule):
-                    log_warning(f"Found non-submodule directory at {backend_libvirt_submodule}, removing")
-                    shutil.rmtree(backend_libvirt_submodule)
-
-            # Add as git submodule if not already present
-            if not os.path.exists(backend_libvirt_submodule):
-                log_info(f"Adding libvirt-node as git submodule in backend/lib/")
-
-                # Get the relative path from libvirt-node to backend for submodule
-                # We'll use the top-level libvirt-node directory as the source
-                try:
-                    run_command(
-                        f"git submodule add ../../libvirt-node lib/libvirt-node",
-                        cwd=context.backend_dir,
-                        timeout=30
-                    )
-                    log_success("Git submodule added successfully")
-                except subprocess.CalledProcessError:
-                    # Submodule might already be registered in .gitmodules
-                    log_info("Submodule already registered, initializing...")
-                    run_command(
-                        "git submodule update --init lib/libvirt-node",
-                        cwd=context.backend_dir,
-                        timeout=30
-                    )
-                    log_success("Git submodule initialized successfully")
-        else:
-            log_info(f"[DRY RUN] Would add git submodule: lib/libvirt-node → ../../libvirt-node")
-
-    except RuntimeError as e:
-        log_error(f"libvirt-node build failed: {e}")
-        log_error("\nCannot proceed with backend installation.")
-        log_error("\nTroubleshooting:")
-        log_error("  1. Verify rust and cargo are installed:")
-        log_error("     $ rustc --version")
-        log_error("  2. Verify libvirt-dev is installed:")
-        log_error("     $ pkg-config --exists libvirt && echo 'OK' || echo 'MISSING'")
-        log_error(f"  3. Check build logs in: {context.libvirt_node_dir}")
-        raise
-    except Exception as e:
-        log_error(f"Unexpected error during libvirt-node build: {e}")
-        raise
-
-    # =================================================================
-    # Phase 4c: Build Backend
-    # =================================================================
-    try:
-        log_section("Phase 4c: Building Backend")
+        log_section("Phase 4b: Building Backend")
 
         build_backend(context)
 
@@ -1065,6 +951,30 @@ def clone_and_build(context: InstallerContext):
         raise
     except Exception as e:
         log_error(f"Unexpected error during backend build: {e}")
+        raise
+
+    # =================================================================
+    # Phase 4c: Build Infinization
+    # =================================================================
+    try:
+        log_section("Phase 4c: Building Infinization")
+        log_info("infinization provides direct QEMU management and nftables firewall")
+
+        build_infinization(context)
+
+    except RuntimeError as e:
+        log_error(f"infinization build failed: {e}")
+        log_error("\nThis may affect VM networking and firewall management.")
+        log_error("\nTroubleshooting:")
+        log_error("  1. Verify Node.js version >= 18.18.0:")
+        log_error("     $ node --version")
+        log_error("  2. Check TypeScript compilation:")
+        log_error(f"     $ cd {context.infinization_dir} && npm run build")
+        log_error("  3. Verify nftables is installed:")
+        log_error("     $ nft --version")
+        raise
+    except Exception as e:
+        log_error(f"Unexpected error during infinization build: {e}")
         raise
 
     # =================================================================
@@ -1139,21 +1049,26 @@ def clone_and_build(context: InstallerContext):
     log_section("Verifying All Builds")
 
     try:
-        # Verify libvirt-node
-        node_files = glob.glob(os.path.join(context.libvirt_node_dir, "*.node"))
-        if node_files:
-            log_success(f"libvirt-node: ✓ {os.path.basename(node_files[0])}")
-        tgz_path = os.path.join(context.libvirt_node_dir, "infinibay-libvirt-node-0.0.1.tgz")
-        if os.path.exists(tgz_path):
-            log_success("libvirt-node: ✓ infinibay-libvirt-node-0.0.1.tgz")
+        # Verify infinization
+        infinization_node_modules = os.path.join(context.infinization_dir, "node_modules")
+        if os.path.exists(infinization_node_modules):
+            log_success("Infinization: ✓ node_modules")
 
-        # Verify libvirt-node submodule in backend/lib/
-        backend_libvirt_submodule = os.path.join(context.backend_dir, "lib", "libvirt-node")
-        if os.path.exists(backend_libvirt_submodule):
-            if os.path.exists(os.path.join(backend_libvirt_submodule, ".git")):
-                log_success(f"Backend: ✓ lib/libvirt-node (git submodule)")
-            else:
-                log_success(f"Backend: ✓ lib/libvirt-node (directory)")
+        infinization_dist = os.path.join(context.infinization_dir, "dist")
+        if os.path.exists(infinization_dist):
+            log_success("Infinization: ✓ dist/ (compiled TypeScript)")
+
+        infinization_main = os.path.join(infinization_dist, "index.js")
+        if os.path.exists(infinization_main):
+            log_success("Infinization: ✓ dist/index.js")
+
+        # Check nftables service (optional)
+        try:
+            result = run_command("systemctl status infinization-nftables.service", check=False, timeout=5)
+            if result.success or "loaded" in result.stdout.lower():
+                log_success("Infinization: ✓ nftables systemd service")
+        except:
+            log_info("Infinization: ⚠ nftables service not verified (non-critical)")
 
         # Verify backend
         backend_node_modules = os.path.join(context.backend_dir, "node_modules")
@@ -1210,8 +1125,8 @@ def clone_and_build(context: InstallerContext):
 
     log_info("Build summary:")
     log_info(f"  ✓ Backend: {context.backend_dir}")
+    log_info(f"  ✓ Infinization: {context.infinization_dir}")
     log_info(f"  ✓ Frontend: {context.frontend_dir}")
     log_info(f"  ✓ Infiniservice: {context.infiniservice_dir}")
-    log_info(f"  ✓ libvirt-node: {context.libvirt_node_dir}")
 
     log_info("\nNext: Phase 5 will configure .env files and create systemd services")

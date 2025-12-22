@@ -27,13 +27,15 @@ def generate_backend_env(context: InstallerContext):
     - DATABASE_URL: PostgreSQL connection string
     - APP_HOST: Host IP for VM connectivity
     - GRAPHIC_HOST: Host IP for graphics
-    - LIBVIRT_NETWORK_NAME: Libvirt virtual network name
     - INFINIBAY_BASE_DIR: Base installation directory
     - PORT: Backend server port
     - RPC_URL: InfiniService RPC endpoint
     - TOKENKEY: JWT token secret
     - BCRYPT_ROUNDS: Password hashing rounds
     - All path variables (iso, disks, uefi, sockets, wallpapers)
+
+    Note: Infinization is configured programmatically, not via environment variables.
+    Default directories: /var/lib/infinization/disks, /var/lib/infinization/sockets, /var/lib/infinization/pids
 
     Args:
         context: Installation configuration context
@@ -44,7 +46,6 @@ def generate_backend_env(context: InstallerContext):
         log_info(f"[DRY RUN] Would create {context.backend_dir}/.env with:")
         log_info(f"  DATABASE_URL={context.database_url}")
         log_info(f"  APP_HOST={context.host_ip}")
-        log_info(f"  LIBVIRT_NETWORK_NAME={context.network_name}")
         log_info(f"  PORT={context.backend_port}")
         return
 
@@ -81,9 +82,7 @@ RPC_URL="http://localhost:9090"
 # VirtIO Windows Drivers ISO (OPTIONAL - auto-detected if not set)
 # The system will automatically search common locations:
 #   - /usr/share/virtio-win/*.iso (Fedora/RHEL package)
-#   - /var/lib/libvirt/images/virtio-win*.iso (Ubuntu 24.10+)
 #   - {context.iso_permanent_dir}/virtio-win*.iso (Infinibay managed)
-#   - /var/lib/libvirt/driver/virtio-win*.iso (legacy location)
 # Only set this if you want to override auto-detection or use a custom location
 # VIRTIO_WIN_ISO_PATH=/path/to/virtio-win.iso
 
@@ -93,19 +92,13 @@ INFINIBAY_BASE_DIR={context.data_dir}
 INFINIBAY_ISO_DIR={context.iso_dir}
 INFINIBAY_ISO_TEMP_DIR={context.iso_temp_dir}
 INFINIBAY_ISO_PERMANENT_DIR={context.iso_permanent_dir}
-INFINIBAY_STORAGE_POOL_NAME=infinibay
 INFINIBAY_WALLPAPERS_DIR={context.wallpapers_dir}
 
-# Graphics and Network
+# Graphics
 GRAPHIC_HOST={context.host_ip}
-# Libvirt virtual network name for VM connectivity
-LIBVIRT_NETWORK_NAME={context.network_name}
 
-# Timeouts (uncomment to customize)
-# LIBVIRT_CONNECT_TIMEOUT=30000
-# LIBVIRT_OPERATION_TIMEOUT=60000
-# VM_START_TIMEOUT=120000
-# VM_SHUTDOWN_TIMEOUT=60000
+# Infinization Configuration (configured programmatically, not via env vars)
+# Default directories: /var/lib/infinization/disks, /var/lib/infinization/sockets, /var/lib/infinization/pids
 """
 
     try:
@@ -174,77 +167,56 @@ NEXT_PUBLIC_GRAPHQL_API_URL={context.graphql_url}
         raise
 
 
-def setup_libvirt_storage_pool(context: InstallerContext):
+def setup_infinization_directories(context: InstallerContext):
     """
-    Create and configure the infinibay libvirt storage pool.
+    Create and configure the infinization storage directories.
 
     Creates:
-    - /var/lib/infinibay/images directory
-    - libvirt storage pool named 'infinibay'
-    - Sets pool to autostart
+    - /var/lib/infinization/disks directory (VM disk images)
+    - /var/lib/infinization/sockets directory (QMP sockets)
+    - /var/lib/infinization/pids directory (QEMU process IDs)
+
+    Note: Infinization manages VMs directly via QEMU, without libvirt.
 
     Args:
         context: Installation configuration context
     """
-    log_info("Setting up libvirt storage pool...")
+    log_info("Setting up infinization directories...")
 
     if context.dry_run:
         log_info("[DRY RUN] Would create:")
-        log_info("  - Directory: /var/lib/infinibay/images")
-        log_info("  - Storage pool: infinibay")
-        log_info("  - Set pool to autostart")
+        log_info("  - Directory: /var/lib/infinization/disks")
+        log_info("  - Directory: /var/lib/infinization/sockets")
+        log_info("  - Directory: /var/lib/infinization/pids")
         return
 
-    storage_path = "/var/lib/infinibay/images"
+    base_path = "/var/lib/infinization"
+    directories = [
+        os.path.join(base_path, "disks"),
+        os.path.join(base_path, "sockets"),
+        os.path.join(base_path, "pids"),
+    ]
 
     try:
-        # Create storage directory if it doesn't exist
-        os.makedirs(storage_path, exist_ok=True)
-        os.chmod(storage_path, 0o755)
-        os.chmod("/var/lib/infinibay", 0o755)
-        log_debug(f"Created storage directory: {storage_path}")
+        # Create base directory
+        os.makedirs(base_path, exist_ok=True)
+        os.chmod(base_path, 0o755)
+        log_debug(f"Created base directory: {base_path}")
 
-        # Check if pool already exists
-        result = run_command("virsh pool-list --all", timeout=10, check=False)
-        if result.success and "infinibay" in result.stdout:
-            log_info("Storage pool 'infinibay' already exists")
-            # Ensure it's started and set to autostart
-            run_command("virsh pool-start infinibay", timeout=10, check=False)
-            run_command("virsh pool-autostart infinibay", timeout=10, check=False)
-            log_success("Storage pool 'infinibay' is active and set to autostart")
-            return
+        # Create subdirectories
+        for dir_path in directories:
+            os.makedirs(dir_path, exist_ok=True)
+            os.chmod(dir_path, 0o755)
+            log_debug(f"Created directory: {dir_path}")
 
-        # Define the pool
-        log_debug("Defining storage pool...")
-        run_command(
-            f'virsh pool-define-as infinibay dir - - - - "{storage_path}"',
-            timeout=30
-        )
+        log_success("Infinization directories configured")
 
-        # Build the pool
-        log_debug("Building storage pool...")
-        run_command("virsh pool-build infinibay", timeout=30)
-
-        # Start the pool
-        log_debug("Starting storage pool...")
-        run_command("virsh pool-start infinibay", timeout=30)
-
-        # Set autostart
-        log_debug("Setting pool to autostart...")
-        run_command("virsh pool-autostart infinibay", timeout=30)
-
-        # Verify pool is active
-        result = run_command("virsh pool-list", timeout=10)
-        if "infinibay" in result.stdout and "active" in result.stdout:
-            log_success("Storage pool 'infinibay' created and activated")
-        else:
-            log_warning("Storage pool created but may not be active")
-
-    except subprocess.CalledProcessError as e:
-        log_error(f"Failed to create storage pool: {e}")
-        raise RuntimeError("Storage pool creation failed")
+    except PermissionError as e:
+        log_error(f"Permission denied creating infinization directories: {e}")
+        log_error("Please run the installer with sudo privileges")
+        raise RuntimeError("Infinization directory setup failed")
     except Exception as e:
-        log_error(f"Unexpected error creating storage pool: {e}")
+        log_error(f"Unexpected error creating infinization directories: {e}")
         raise
 
 
@@ -440,9 +412,9 @@ def run_backend_setup(context: InstallerContext):
         if not result.success:
             log_error("Backend setup script failed")
             log_error("Please verify:")
-            log_error("  - Libvirt is running: systemctl status libvirtd")
             log_error("  - Database connection is working")
             log_error("  - Backend .env file is correct")
+            log_error("  - KVM is available: ls -la /dev/kvm")
             if result.stderr:
                 log_error(f"Error output: {result.stderr}")
             raise RuntimeError("Backend setup failed")
@@ -504,8 +476,8 @@ def create_systemd_service(
     # Build systemd service file content
     service_content = f"""[Unit]
 Description={description}
-After=network.target postgresql.service libvirtd.service
-Requires=postgresql.service libvirtd.service
+After=network.target postgresql.service
+Requires=postgresql.service
 
 [Service]
 Type=simple
@@ -721,15 +693,15 @@ def create_services(context: InstallerContext):
         log_error(f"Error: {e}")
         raise RuntimeError("Configuration generation failed")
 
-    # Phase 5c: Setup libvirt storage pool
-    log_section("Setting up Libvirt Storage Pool")
+    # Phase 5c: Setup infinization directories
+    log_section("Setting up Infinization Directories")
     try:
-        setup_libvirt_storage_pool(context)
-        log_success("Libvirt storage pool configured")
+        setup_infinization_directories(context)
+        log_success("Infinization directories configured")
     except Exception as e:
-        log_error("Failed to setup libvirt storage pool")
+        log_error("Failed to setup infinization directories")
         log_error(f"Error: {e}")
-        raise RuntimeError("Storage pool setup failed")
+        raise RuntimeError("Infinization directory setup failed")
 
     # Phase 5d: Run backend setup
     log_section("Running Backend Setup")
@@ -754,7 +726,7 @@ def create_services(context: InstallerContext):
         log_error("Backend setup failed. This is critical for system operation.")
         log_error("Troubleshooting steps:")
         log_error(f"  1. Check PostgreSQL: systemctl status postgresql")
-        log_error(f"  2. Check libvirt: systemctl status libvirtd")
+        log_error(f"  2. Check KVM access: ls -la /dev/kvm")
         log_error(f"  3. Test database connection: psql -h {context.db_host} -U {context.db_user} -d {context.db_name}")
         log_error(f"  4. Review backend logs in the terminal output above")
         log_error(f"Error: {e}")
@@ -816,18 +788,19 @@ def create_services(context: InstallerContext):
     if context.data_dir != context.install_dir:
         log_info(f"  Data Directory: {context.data_dir}")
     log_info(f"  Host IP Address: {context.host_ip}")
-    log_info(f"  Network Name: {context.network_name}")
 
-    # Check network status
-    from .utils import run_command
-    result = run_command(f'virsh net-info {context.network_name}', check=False, capture_output=True)
-    if result and result.returncode == 0:
-        if 'Active:' in result.stdout and 'yes' in result.stdout.lower():
-            log_success(f"  Libvirt Network Status: ✓ Active")
-        else:
-            log_warning(f"  Libvirt Network Status: ⚠ Exists but not active")
+    # Check infinization directories
+    infinization_base = "/var/lib/infinization"
+    if os.path.isdir(infinization_base):
+        log_success(f"  Infinization Directories: ✓ Configured at {infinization_base}")
     else:
-        log_warning(f"  Libvirt Network Status: ✗ Not found (manual setup required)")
+        log_warning(f"  Infinization Directories: ⚠ Not found at {infinization_base}")
+
+    # Check KVM access
+    if os.path.exists("/dev/kvm"):
+        log_success(f"  KVM Access: ✓ Available")
+    else:
+        log_warning(f"  KVM Access: ✗ /dev/kvm not found")
 
     log_info("")
 
@@ -879,8 +852,8 @@ def create_services(context: InstallerContext):
     log_warning(f"    - Backend: {context.backend_port}")
     if context.skip_isos:
         log_warning("  • ISO downloads were skipped. You may need to download them manually.")
-    if result and result.returncode != 0:
-        log_warning("  • Libvirt network setup failed - verify configuration before creating VMs")
+    if not os.path.exists("/dev/kvm"):
+        log_warning("  • KVM is not available - verify virtualization before creating VMs")
     log_info("")
 
     # Final message

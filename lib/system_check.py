@@ -5,7 +5,7 @@ This module handles installation of required system packages:
 - Node.js and npm
 - PostgreSQL
 - Redis (for caching and performance optimization)
-- QEMU/KVM and libvirt
+- QEMU/KVM (virtualization)
 - Rust and Cargo
 - Build tools and development libraries
 """
@@ -28,15 +28,10 @@ UBUNTU_PACKAGES = [
     'postgresql-contrib',
     'redis-server',  # Cache for firewall performance optimization
     'qemu-kvm',
-    'libvirt-daemon-system',
-    'libvirt-clients',
     'bridge-utils',
-    'virtinst',
-    'virt-manager',
     'cpu-checker',
     'build-essential',
     'pkg-config',
-    'libvirt-dev',
     'libssl-dev',
     'btrfs-progs',
     'p7zip-full',
@@ -51,16 +46,11 @@ FEDORA_PACKAGES = [
     'postgresql-server',
     'redis',  # Cache for firewall performance optimization
     'qemu-kvm',
-    'libvirt',
-    'libvirt-client',
     'bridge-utils',
-    'virt-install',
-    'virt-manager',
     'gcc',
     'gcc-c++',
     'make',
     'pkg-config',
-    'libvirt-devel',
     'openssl-devel',
     'btrfs-progs',
     'p7zip',
@@ -75,7 +65,6 @@ REQUIRED_COMMANDS = [
     'npm',
     'psql',
     'redis-cli',  # Redis client for cache verification
-    'virsh',
     'qemu-system-x86_64',
 ]
 
@@ -235,7 +224,7 @@ def enable_and_start_services(context: InstallerContext):
 
     # Redis service name differs by OS
     redis_service = 'redis-server' if context.os_info.os_type == OSType.UBUNTU else 'redis'
-    services = ['libvirtd', 'postgresql', redis_service]
+    services = ['postgresql', redis_service]
 
     for service in services:
         if context.dry_run:
@@ -263,11 +252,11 @@ def enable_and_start_services(context: InstallerContext):
             except:
                 log_warning(f"Could not start {service}: {e}")
 
-    # Add current user to libvirt and kvm groups
+    # Add current user to kvm group for /dev/kvm access
     sudo_user = os.environ.get('SUDO_USER')
     if sudo_user and not context.dry_run:
         groups_added = []
-        for group in ['libvirt', 'kvm']:
+        for group in ['kvm']:
             try:
                 run_command(f"usermod -aG {group} {sudo_user}", timeout=10)
                 groups_added.append(group)
@@ -496,32 +485,22 @@ def check_kvm_support(context: InstallerContext):
 
 def setup_libvirt_network_phase(context: InstallerContext):
     """
-    Setup libvirt network for VM connectivity.
+    DEPRECATED: This function is no longer used.
 
-    This is called during system checks after services are started.
-    Network setup is non-critical - failures are logged but don't fail installation.
+    Network management has moved to infinization, which handles networking via nftables.
+    Libvirt is no longer installed or managed by the installer.
+
+    This function is retained temporarily for backwards compatibility and will be
+    removed in a future cleanup once all dependent phases are verified complete.
 
     Args:
         context: Installation configuration context
     """
-    from .network_setup import setup_libvirt_network
-
-    log_section("Setting up libvirt network...")
-
-    # Handle dry-run mode
-    if context.dry_run:
-        log_info("[DRY RUN] Would attempt to configure libvirt network")
-        return
-
-    # Try to setup the libvirt network
-    success = setup_libvirt_network(context)
-
-    if success:
-        log_success("Libvirt network configured successfully")
-    else:
-        log_error("Failed to configure libvirt network automatically")
-        log_warning("You will need to configure the network manually")
-        log_info("See documentation for manual network setup instructions")
+    log_warning(
+        "setup_libvirt_network_phase() is deprecated. "
+        "Network management is now handled by infinization via nftables."
+    )
+    log_info("No libvirt network configuration performed - this is expected behavior.")
 
 
 def run_system_checks(context: InstallerContext):
@@ -533,7 +512,7 @@ def run_system_checks(context: InstallerContext):
     2. Update package cache (apt update / dnf check-update)
     3. Install system packages with OS-specific names
     4. Verify installations with version checks
-    5. Enable and start libvirt and postgresql services
+    5. Enable and start postgresql and redis services
     6. Check KVM support (kvm-ok or equivalent)
 
     Args:
@@ -575,12 +554,9 @@ def run_system_checks(context: InstallerContext):
             log_error(f"mingw-w64 verification failed: {e}")
             raise
 
-        # Setup libvirt network (non-critical)
-        try:
-            setup_libvirt_network_phase(context)
-        except Exception as e:
-            log_warning(f"Libvirt network setup failed: {e}")
-            log_info("You will need to configure the network manually")
+        # Network setup is handled by infinization via nftables
+        # No libvirt network configuration needed
+        log_info("Network management will be handled by infinization (nftables)")
 
         # Check KVM support (non-critical)
         try:
@@ -594,7 +570,7 @@ def run_system_checks(context: InstallerContext):
         sudo_user = os.environ.get('SUDO_USER')
         if sudo_user:
             log_info(
-                "\nNote: If you were added to the libvirt or kvm groups, you may need to "
+                "\nNote: If you were added to the kvm group, you may need to "
                 "log out and back in for changes to take effect."
             )
 
