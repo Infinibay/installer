@@ -4,7 +4,6 @@ Phase 2: System dependencies installation.
 This module handles installation of required system packages:
 - Node.js and npm
 - PostgreSQL
-- Redis (for caching and performance optimization)
 - QEMU/KVM (virtualization)
 - Rust and Cargo
 - Build tools and development libraries
@@ -26,7 +25,6 @@ UBUNTU_PACKAGES = [
     'npm',
     'postgresql',
     'postgresql-contrib',
-    'redis-server',  # Cache for firewall performance optimization
     'qemu-kvm',
     'bridge-utils',
     'cpu-checker',
@@ -44,7 +42,6 @@ FEDORA_PACKAGES = [
     'npm',
     'postgresql',
     'postgresql-server',
-    'redis',  # Cache for firewall performance optimization
     'qemu-kvm',
     'bridge-utils',
     'gcc',
@@ -64,7 +61,6 @@ REQUIRED_COMMANDS = [
     'node',
     'npm',
     'psql',
-    'redis-cli',  # Redis client for cache verification
     'qemu-system-x86_64',
 ]
 
@@ -165,19 +161,33 @@ def verify_installations(context: InstallerContext):
             version = get_command_version(cmd)
             log_debug(f"✓ {cmd}: {version}")
 
-    # Special check for Node.js version
+    # Special check for Node.js version - ENFORCED requirement
     if command_exists('node'):
         try:
             node_version_output = get_command_version('node')
-            # Extract version number (e.g., "v16.20.0" -> 16)
+            # Extract version number (e.g., "v18.20.0" -> 18)
             version_parts = node_version_output.strip().lstrip('v').split('.')
             major_version = int(version_parts[0])
 
-            if major_version < 16:
-                log_warning(
+            if major_version < 18:
+                log_error(
                     f"Node.js version {major_version} detected. "
-                    f"Infinibay requires Node.js 16 or higher."
+                    f"Infinibay requires Node.js 18 or higher."
                 )
+                raise RuntimeError(
+                    f"Node.js version {major_version} is not supported.\n"
+                    f"Infinibay requires Node.js 18 or higher for compatibility with:\n"
+                    f"  - Next.js 14 (frontend)\n"
+                    f"  - Prisma 6 (backend ORM)\n"
+                    f"  - Apollo Server 3 (GraphQL)\n"
+                    f"\nPlease upgrade Node.js:\n"
+                    f"  Ubuntu: curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt install -y nodejs\n"
+                    f"  Fedora: sudo dnf module reset nodejs && sudo dnf module enable nodejs:18 && sudo dnf install -y nodejs"
+                )
+            else:
+                log_success(f"Node.js version {major_version} meets requirement (≥18)")
+        except RuntimeError:
+            raise  # Re-raise RuntimeError from version check
         except Exception as e:
             log_warning(f"Could not parse Node.js version: {e}")
 
@@ -222,9 +232,7 @@ def enable_and_start_services(context: InstallerContext):
     """Enable and start required system services."""
     log_info("Enabling and starting services...")
 
-    # Redis service name differs by OS
-    redis_service = 'redis-server' if context.os_info.os_type == OSType.UBUNTU else 'redis'
-    services = ['postgresql', redis_service]
+    services = ['postgresql']
 
     for service in services:
         if context.dry_run:
@@ -512,7 +520,7 @@ def run_system_checks(context: InstallerContext):
     2. Update package cache (apt update / dnf check-update)
     3. Install system packages with OS-specific names
     4. Verify installations with version checks
-    5. Enable and start postgresql and redis services
+    5. Enable and start postgresql service
     6. Check KVM support (kvm-ok or equivalent)
 
     Args:
